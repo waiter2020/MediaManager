@@ -1,5 +1,6 @@
 package com.mediamanager.library.service;
 
+import com.mediamanager.library.dto.ScanProgressDTO;
 import com.mediamanager.library.entity.LibraryPath;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.repository.MediaLibraryRepository;
@@ -14,6 +15,8 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
@@ -25,10 +28,14 @@ public class LibraryScanService {
     private final FileScanProcessor fileScanProcessor;
     private final SseService sseService;
 
-    /**
-     * Asynchronously scan a library. No @Transactional here — each file is processed
-     * in its own independent transaction via FileScanProcessor.
-     */
+    private final Map<Integer, ScanProgressDTO> activeScans = new ConcurrentHashMap<>();
+
+    private static final int THROTTLE_FILE_COUNT = 50;
+
+    public Map<Integer, ScanProgressDTO> getActiveScans() {
+        return activeScans;
+    }
+
     @Async
     public void scanLibraryAsync(Integer libraryId) {
         log.info("Starting scan for library: {}", libraryId);
@@ -47,21 +54,43 @@ public class LibraryScanService {
             return;
         }
 
+        ScanProgressDTO progress = ScanProgressDTO.builder()
+                .libraryId(libraryId)
+                .libraryName(library.getName())
+                .status("SCANNING")
+                .currentPath("")
+                .totalFiles(0)
+                .scannedFiles(0)
+                .matchedFiles(0)
+                .newItems(0)
+                .startedAt(System.currentTimeMillis())
+                .updatedAt(System.currentTimeMillis())
+                .build();
+        activeScans.put(libraryId, progress);
+        broadcastProgress(progress);
+
         AtomicInteger totalFiles = new AtomicInteger(0);
         AtomicInteger matchedFiles = new AtomicInteger(0);
         AtomicInteger newFiles = new AtomicInteger(0);
 
         for (LibraryPath path : library.getPaths()) {
-            scanDirectory(library, path.getPath(), totalFiles, matchedFiles, newFiles);
+            progress.setCurrentPath(path.getPath());
+            scanDirectory(library, path.getPath(), totalFiles, matchedFiles, newFiles, progress);
         }
 
         updateLastScannedAt(libraryId);
+
+        progress.setStatus("DONE");
+        progress.setUpdatedAt(System.currentTimeMillis());
+        broadcastProgress(progress);
 
         String summary = String.format(
                 "Scan complete for '%s': scanned %d files, %d matched type [%s], %d new items added",
                 library.getName(), totalFiles.get(), matchedFiles.get(), library.getType(), newFiles.get());
         log.info(summary);
         sseService.broadcast("scan-end", summary);
+
+        activeScans.remove(libraryId);
 
         if (matchedFiles.get() == 0 && totalFiles.get() > 0) {
             String hint = String.format(
@@ -79,7 +108,6 @@ public class LibraryScanService {
         Path targetDir = Paths.get(dirPathStr);
         if (!Files.exists(targetDir) || !Files.isDirectory(targetDir)) return;
 
-        // Load libraries in a read-only transaction
         MediaLibrary lib = findLibraryForPath(dirPathStr);
         if (lib == null) return;
 
@@ -88,22 +116,16 @@ public class LibraryScanService {
         AtomicInteger total = new AtomicInteger(0);
         AtomicInteger matched = new AtomicInteger(0);
         AtomicInteger added = new AtomicInteger(0);
-        scanDirectory(lib, targetDir.toString(), total, matched, added);
+        scanDirectory(lib, targetDir.toString(), total, matched, added, null);
         sseService.broadcast("scan-progress", String.format(
                 "Targeted scan done: %d files, %d matched, %d new", total.get(), matched.get(), added.get()));
     }
 
-    /**
-     * Load library with paths and extractor configs in a short read-only transaction.
-     */
     @Transactional(readOnly = true)
     public MediaLibrary loadLibrary(Integer libraryId) {
         return libraryRepository.findWithDetailsById(libraryId).orElse(null);
     }
 
-    /**
-     * Find which library contains the given directory path.
-     */
     @Transactional(readOnly = true)
     public MediaLibrary findLibraryForPath(String dirPathStr) {
         return libraryRepository.findAll().stream()
@@ -113,9 +135,6 @@ public class LibraryScanService {
                 .orElse(null);
     }
 
-    /**
-     * Update the last scanned timestamp in its own transaction.
-     */
     @Transactional
     public void updateLastScannedAt(Integer libraryId) {
         libraryRepository.findById(libraryId).ifPresent(library -> {
@@ -125,7 +144,8 @@ public class LibraryScanService {
     }
 
     private void scanDirectory(MediaLibrary library, String directoryPath,
-                               AtomicInteger totalFiles, AtomicInteger matchedFiles, AtomicInteger newFiles) {
+                               AtomicInteger totalFiles, AtomicInteger matchedFiles, AtomicInteger newFiles,
+                               ScanProgressDTO progress) {
         Path startPath = Paths.get(directoryPath);
         if (!Files.exists(startPath) || !Files.isDirectory(startPath)) {
             log.warn("Directory does not exist or is not a directory: {}", directoryPath);
@@ -143,7 +163,10 @@ public class LibraryScanService {
                     totalFiles.incrementAndGet();
 
                     String mediaType = fileScanProcessor.checkFile(library, file);
-                    if (mediaType == null) return FileVisitResult.CONTINUE;
+                    if (mediaType == null) {
+                        throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles, file);
+                        return FileVisitResult.CONTINUE;
+                    }
 
                     matchedFiles.incrementAndGet();
 
@@ -154,6 +177,7 @@ public class LibraryScanService {
                         log.error("Failed to process file: {}", file, e);
                     }
 
+                    throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles, file);
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -165,6 +189,31 @@ public class LibraryScanService {
             });
         } catch (IOException e) {
             log.error("Error walking directory: {}", directoryPath, e);
+            if (progress != null) {
+                progress.setStatus("ERROR");
+                progress.setUpdatedAt(System.currentTimeMillis());
+                broadcastProgress(progress);
+            }
         }
+    }
+
+    private void throttledProgressUpdate(ScanProgressDTO progress,
+                                         AtomicInteger totalFiles, AtomicInteger matchedFiles,
+                                         AtomicInteger newFiles, Path currentFile) {
+        if (progress == null) return;
+        int total = totalFiles.get();
+        if (total % THROTTLE_FILE_COUNT != 0) return;
+
+        progress.setTotalFiles(total);
+        progress.setScannedFiles(total);
+        progress.setMatchedFiles(matchedFiles.get());
+        progress.setNewItems(newFiles.get());
+        progress.setCurrentPath(currentFile.getParent() != null ? currentFile.getParent().toString() : "");
+        progress.setUpdatedAt(System.currentTimeMillis());
+        broadcastProgress(progress);
+    }
+
+    private void broadcastProgress(ScanProgressDTO progress) {
+        sseService.broadcast("scan-status", progress);
     }
 }

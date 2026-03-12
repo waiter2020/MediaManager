@@ -13,7 +13,7 @@ services:
     volumes:
       - ./media:/media:ro # Mount media read-only
       - ./data:/app/data  # Mount data for SQLite and cache storage
-      - D:\install\steam\steamapps\workshop:/home/test_media:ro
+      - E:\2024软考系统架构设计师VIP套餐视频:/home/test_media:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost/api/v1/system/status"]

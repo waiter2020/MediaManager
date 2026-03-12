@@ -16,6 +16,14 @@ export async function getDashboardStats() {
   return request('/api/v1/system/status', { method: 'GET' });
 }
 
+export async function getSystemInfo() {
+  return request('/api/v1/system/info', { method: 'GET' });
+}
+
+export async function getScanStatus() {
+  return request('/api/v1/system/scan/status', { method: 'GET' });
+}
+
 export async function getDirectories(path?: string) {
   return request('/api/v1/system/directories', {
     method: 'GET',

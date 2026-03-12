@@ -49,10 +49,11 @@ const MediaCard: React.FC<MediaCardProps> = ({
   const [imgError, setImgError] = useState(false);
 
   const token = localStorage.getItem('accessToken') || '';
+  const tokenParam = `token=${encodeURIComponent(token)}`;
   const posterUrl = posterPath
-    ? `/api/v1/items/${id}/poster`
+    ? `/api/v1/items/${id}/poster?${tokenParam}`
     : type === 'IMAGE' && fileIds && fileIds.length > 0
-      ? `/api/v1/stream/images/${fileIds[0]}?w=300&token=${encodeURIComponent(token)}`
+      ? `/api/v1/stream/images/${fileIds[0]}?w=300&${tokenParam}`
       : null;
   const year = releaseDate ? releaseDate.substring(0, 4) : null;
   const showPlayIcon = type === 'MOVIE' || type === 'TV_SHOW' || type === 'AUDIO';

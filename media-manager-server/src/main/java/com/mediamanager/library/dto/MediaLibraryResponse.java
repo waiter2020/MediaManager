@@ -18,6 +18,8 @@ public class MediaLibraryResponse {
     private Integer scanIntervalMinutes;
     private Instant createdAt;
     private Instant updatedAt;
+    private Instant lastScannedAt;
+    private Long totalItems;
 
     private List<PathRes> paths;
     private List<ExtractorRes> extractors;

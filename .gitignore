@@ -25,7 +25,7 @@ pnpm-debug.log*
 
 # Local data / media (do not commit)
 data/
-media/
+/media/
 *.db
 *.sqlite
 *.sqlite3

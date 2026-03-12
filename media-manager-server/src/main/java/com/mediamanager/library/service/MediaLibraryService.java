@@ -66,7 +66,11 @@ public class MediaLibraryService {
     @Transactional(readOnly = true)
     public List<MediaLibraryResponse> getAllLibraries() {
         return libraryRepository.findAll().stream()
-                .map(mapper::toResponse)
+                .map(lib -> {
+                    MediaLibraryResponse resp = mapper.toResponse(lib);
+                    resp.setTotalItems(mediaItemRepository.countByLibrary_Id(lib.getId()));
+                    return resp;
+                })
                 .collect(Collectors.toList());
     }
 
@@ -74,7 +78,9 @@ public class MediaLibraryService {
     public MediaLibraryResponse getLibraryById(Integer id) {
         MediaLibrary library = libraryRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.LIBRARY_NOT_FOUND));
-        return mapper.toResponse(library);
+        MediaLibraryResponse resp = mapper.toResponse(library);
+        resp.setTotalItems(mediaItemRepository.countByLibrary_Id(id));
+        return resp;
     }
 
     @Transactional

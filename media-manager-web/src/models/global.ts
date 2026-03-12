@@ -1,37 +1,120 @@
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { message } from 'antd';
 
+export interface ScanProgress {
+  libraryId: number;
+  libraryName: string;
+  status: 'SCANNING' | 'DONE' | 'ERROR';
+  currentPath: string;
+  totalFiles: number;
+  scannedFiles: number;
+  matchedFiles: number;
+  newItems: number;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export interface ScanEvent {
+  time: string;
+  type: string;
+  message: string;
+}
+
+const MAX_EVENTS = 30;
+
 export default () => {
-    const connectSse = (clientId: string) => {
-      const eventSource = new EventSource(`/api/v1/sse/events?clientId=${clientId}`);
-      
-      eventSource.addEventListener('scan-start', (e: any) => {
-        message.info(e.data);
-      });
+  const [scanStatus, setScanStatus] = useState<Record<number, ScanProgress>>({});
+  const [recentEvents, setRecentEvents] = useState<ScanEvent[]>([]);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-      eventSource.addEventListener('scan-progress', (e: any) => {
-         // Could dispatch to a global state to update a progress bar
-         console.log('Progress:', e.data);
-      });
+  const addEvent = useCallback((type: string, msg: string) => {
+    setRecentEvents((prev) =>
+      [{ time: new Date().toLocaleTimeString(), type, message: msg }, ...prev].slice(0, MAX_EVENTS),
+    );
+  }, []);
 
-      eventSource.addEventListener('scan-end', (e: any) => {
-        message.success(e.data);
-      });
+  const connectSse = useCallback((clientId: string) => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
 
-      eventSource.addEventListener('file-added', (e: any) => {
-        message.success(`New file added: ${e.data}`);
-      });
+    const es = new EventSource(`/api/v1/sse/events?clientId=${clientId}`);
+    eventSourceRef.current = es;
 
-      eventSource.onerror = (e) => {
-        console.error('SSE Error:', e);
-        eventSource.close();
-        setTimeout(() => {
-          // simple retry, caller can decide whether to reconnect
-          connectSse(clientId);
-        }, 5000);
-      };
+    es.addEventListener('scan-status', (e: any) => {
+      try {
+        const data: ScanProgress = JSON.parse(e.data);
+        setScanStatus((prev) => {
+          if (data.status === 'DONE' || data.status === 'ERROR') {
+            const next = { ...prev };
+            delete next[data.libraryId];
+            return next;
+          }
+          return { ...prev, [data.libraryId]: data };
+        });
+      } catch {
+        // ignore malformed payloads
+      }
+    });
 
-      return eventSource;
+    es.addEventListener('scan-start', (e: any) => {
+      message.info(e.data);
+      addEvent('START', e.data);
+    });
+
+    es.addEventListener('scan-progress', (e: any) => {
+      addEvent('PROGRESS', e.data);
+    });
+
+    es.addEventListener('scan-end', (e: any) => {
+      message.success(e.data);
+      addEvent('END', e.data);
+    });
+
+    es.addEventListener('file-added', (e: any) => {
+      message.success(`New file added: ${e.data}`);
+      addEvent('FILE', e.data);
+    });
+
+    es.onerror = () => {
+      es.close();
+      eventSourceRef.current = null;
+      setTimeout(() => connectSse(clientId), 5000);
     };
 
-    return { connectSse };
+    return es;
+  }, [addEvent]);
+
+  const fetchScanSnapshot = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('accessToken');
+      const res = await fetch('/api/v1/system/scan/status', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const json = await res.json();
+      if (json.code === 200 && Array.isArray(json.data)) {
+        const map: Record<number, ScanProgress> = {};
+        json.data.forEach((s: ScanProgress) => {
+          if (s.status === 'SCANNING') {
+            map[s.libraryId] = s;
+          }
+        });
+        setScanStatus(map);
+      }
+    } catch {
+      // silently fail
+    }
+  }, []);
+
+  useEffect(() => {
+    const clientId = 'global-' + Math.random().toString(36).substring(2, 9);
+    const es = connectSse(clientId);
+    fetchScanSnapshot();
+    return () => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, []);
+
+  return { scanStatus, recentEvents, connectSse, fetchScanSnapshot };
 };

@@ -2,7 +2,9 @@ package com.mediamanager.system.controller;
 
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.library.dto.ScanProgressDTO;
 import com.mediamanager.library.repository.MediaLibraryRepository;
+import com.mediamanager.library.service.LibraryScanService;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.system.repository.SysConfigRepository;
 import com.mediamanager.system.repository.SysUserRepository;
@@ -32,6 +34,7 @@ public class SystemController {
     private final MediaLibraryRepository libraryRepository;
     private final MediaItemRepository mediaItemRepository;
     private final TagRepository tagRepository;
+    private final LibraryScanService libraryScanService;
 
     @GetMapping("/status")
     @Operation(summary = "Get system status")
@@ -112,6 +115,12 @@ public class SystemController {
             });
         });
         return ApiResponse.success();
+    }
+
+    @GetMapping("/scan/status")
+    @Operation(summary = "Get active scan progress snapshot")
+    public ApiResponse<java.util.Collection<ScanProgressDTO>> getScanStatus() {
+        return ApiResponse.success(libraryScanService.getActiveScans().values());
     }
 
     @GetMapping("/info")
