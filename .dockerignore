@@ -1,0 +1,11 @@
+**/.DS_Store
+**/node_modules
+**/dist
+**/target
+**/.umi
+**/.idea
+**/.vscode
+data/
+media/
+*.db
+*.log

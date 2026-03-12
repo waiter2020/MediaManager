@@ -1,0 +1,101 @@
+.horizontal-media-row {
+  position: relative;
+}
+
+.horizontal-media-row .row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.horizontal-media-row .row-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.horizontal-media-row .row-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.horizontal-media-row .row-scroll-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.horizontal-media-row .row-scroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+
+.horizontal-media-row .row-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.horizontal-media-row .row-scroll-item {
+  flex: 0 0 170px;
+  scroll-snap-align: start;
+}
+
+@media (min-width: 1200px) {
+  .horizontal-media-row .row-scroll-item {
+    flex: 0 0 185px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .horizontal-media-row .row-scroll-item {
+    flex: 0 0 200px;
+  }
+}
+
+.horizontal-media-row .scroll-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+  opacity: 0;
+}
+
+.horizontal-media-row .row-scroll-container:hover .scroll-btn {
+  opacity: 1;
+}
+
+.horizontal-media-row .scroll-btn:hover {
+  background: rgba(22, 104, 220, 0.8);
+}
+
+.horizontal-media-row .scroll-btn.scroll-left {
+  left: 4px;
+}
+
+.horizontal-media-row .scroll-btn.scroll-right {
+  right: 4px;
+}
+
+.horizontal-media-row .scroll-btn:disabled {
+  opacity: 0 !important;
+  cursor: default;
+}
