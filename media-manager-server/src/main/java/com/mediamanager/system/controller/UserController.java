@@ -67,6 +67,13 @@ public class UserController {
         return ApiResponse.success(userService.assignRoles(id, request));
     }
 
+    @GetMapping("/{id}/library-access")
+    @PreAuthorize("hasAuthority('user:manage')")
+    @Operation(summary = "Get library access for user")
+    public ApiResponse<List<LibraryAccessRequest.LibraryAccessItem>> getLibraryAccess(@PathVariable Integer id) {
+        return ApiResponse.success(userService.getLibraryAccess(id));
+    }
+
     @PutMapping("/{id}/library-access")
     @PreAuthorize("hasAuthority('user:manage')")
     @Operation(summary = "Set library access for user")

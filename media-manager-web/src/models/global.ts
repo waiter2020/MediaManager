@@ -20,11 +20,19 @@ export interface ScanEvent {
   message: string;
 }
 
+export interface ScrapeTaskEvent {
+  taskId: number;
+  status: string;
+  scraped?: number;
+  errors?: number;
+}
+
 const MAX_EVENTS = 30;
 
 export default () => {
   const [scanStatus, setScanStatus] = useState<Record<number, ScanProgress>>({});
   const [recentEvents, setRecentEvents] = useState<ScanEvent[]>([]);
+  const [scrapeTasks, setScrapeTasks] = useState<Record<number, ScrapeTaskEvent>>({});
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const addEvent = useCallback((type: string, msg: string) => {
@@ -38,7 +46,9 @@ export default () => {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`/api/v1/sse/events?clientId=${clientId}`);
+    const token = localStorage.getItem('accessToken');
+    const tokenQ = token ? `&token=${encodeURIComponent(token)}` : '';
+    const es = new EventSource(`/api/v1/sse/events?clientId=${clientId}${tokenQ}`);
     eventSourceRef.current = es;
 
     es.addEventListener('scan-status', (e: any) => {
@@ -74,6 +84,23 @@ export default () => {
     es.addEventListener('file-added', (e: any) => {
       message.success(`New file added: ${e.data}`);
       addEvent('FILE', e.data);
+    });
+
+    es.addEventListener('scrape.task.updated', (e: any) => {
+      try {
+        const data: ScrapeTaskEvent = JSON.parse(e.data);
+        setScrapeTasks((prev) => ({ ...prev, [data.taskId]: data }));
+        addEvent('SCRAPE', `任务 #${data.taskId} → ${data.status}`);
+        if (data.status === 'SUCCESS' || data.status === 'FAILED') {
+          message.info(`刮削任务 #${data.taskId} 已结束：${data.status}`);
+        }
+      } catch {
+        // ignore malformed payloads
+      }
+    });
+
+    es.addEventListener('scrape-end', (e: any) => {
+      addEvent('SCRAPE', e.data);
     });
 
     es.onerror = () => {
@@ -116,5 +143,5 @@ export default () => {
     };
   }, []);
 
-  return { scanStatus, recentEvents, connectSse, fetchScanSnapshot };
+  return { scanStatus, recentEvents, scrapeTasks, connectSse, fetchScanSnapshot };
 };

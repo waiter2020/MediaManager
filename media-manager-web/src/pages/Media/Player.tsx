@@ -1,16 +1,18 @@
 import { PageContainer } from '@ant-design/pro-components';
-import { Card, Result, Space, Button, Spin, Image } from 'antd';
+import { Button, Card, Result, Spin } from 'antd';
 import { useParams, history } from '@umijs/max';
 import React, { useEffect, useState } from 'react';
 import { getItem } from '@/services/media';
-import { getFileStreamUrl, getRawImageUrl } from '@/services/stream';
+import { getPlaybackInfo, appendAuthToken, getRawImageUrl } from '@/services/stream';
 import { recordPlay } from '@/services/userActivity';
 import { ArrowLeftOutlined } from '@ant-design/icons';
+import VideoPlayer from '@/components/VideoPlayer';
 
 const Player: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<any>(null);
   const [streamUrl, setStreamUrl] = useState<string>('');
+  const [playbackMode, setPlaybackMode] = useState<'direct' | 'hls'>('direct');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,10 +25,22 @@ const Player: React.FC = () => {
           setData(item);
           recordPlay({ mediaItemId: item.id }).catch(() => {});
           if (Array.isArray(item.fileIds) && item.fileIds.length > 0) {
+            const fileId = item.fileIds[0];
             if (item.type === 'IMAGE') {
-              setStreamUrl(getRawImageUrl(item.fileIds[0]));
+              setStreamUrl(getRawImageUrl(fileId));
+              setPlaybackMode('direct');
+            } else if (item.type === 'AUDIO') {
+              const pb = await getPlaybackInfo(fileId);
+              if (pb.code === 200 && pb.data?.url) {
+                setStreamUrl(appendAuthToken(pb.data.url));
+              }
+              setPlaybackMode('direct');
             } else {
-              setStreamUrl(getFileStreamUrl(item.fileIds[0]));
+              const pb = await getPlaybackInfo(fileId);
+              if (pb.code === 200 && pb.data) {
+                setPlaybackMode(pb.data.mode === 'hls' ? 'hls' : 'direct');
+                setStreamUrl(appendAuthToken(pb.data.url));
+              }
             }
           }
         }
@@ -46,11 +60,7 @@ const Player: React.FC = () => {
     if (data.type === 'IMAGE') {
       return (
         <div style={{ textAlign: 'center', padding: 16 }}>
-          <Image
-            src={streamUrl}
-            alt={data.title}
-            style={{ maxHeight: '80vh', maxWidth: '100%' }}
-          />
+          <img src={streamUrl} alt={data.title} style={{ maxHeight: '80vh', maxWidth: '100%' }} />
         </div>
       );
     }
@@ -59,9 +69,6 @@ const Player: React.FC = () => {
       return (
         <div style={{ padding: '40px 16px', textAlign: 'center' }}>
           <div style={{ marginBottom: 24, fontSize: 20, fontWeight: 500 }}>{data.title}</div>
-          {data.audioMetadata?.artist && (
-            <div style={{ marginBottom: 16, color: '#888' }}>{data.audioMetadata.artist}</div>
-          )}
           <audio controls autoPlay style={{ width: '100%', maxWidth: 600 }} src={streamUrl}>
             您的浏览器不支持 audio 标签。
           </audio>
@@ -69,19 +76,12 @@ const Player: React.FC = () => {
       );
     }
 
-    return (
-      <div style={{ background: '#000', borderRadius: 8, overflow: 'hidden' }}>
-        <video
-          width="100%"
-          controls
-          autoPlay
-          style={{ maxHeight: '80vh', display: 'block' }}
-          src={streamUrl}
-        >
-          您的浏览器不支持 video 标签。
-        </video>
-      </div>
-    );
+    const token = localStorage.getItem('accessToken') || '';
+    const poster =
+      data.id && token
+        ? `/api/v1/items/${data.id}/poster?token=${encodeURIComponent(token)}`
+        : data.posterPath;
+    return <VideoPlayer src={streamUrl} mode={playbackMode} poster={poster} />;
   };
 
   return (
@@ -93,9 +93,7 @@ const Player: React.FC = () => {
         </Button>,
       ]}
     >
-      <Card bodyStyle={{ padding: 0 }}>
-        {renderPlayer()}
-      </Card>
+      <Card bodyStyle={{ padding: 0 }}>{renderPlayer()}</Card>
     </PageContainer>
   );
 };

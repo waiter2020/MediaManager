@@ -7,6 +7,7 @@ import com.mediamanager.system.entity.SysUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,6 +23,7 @@ public class UserActivityController {
     private final UserActivityService activityService;
 
     @GetMapping("/recent/played")
+    @PreAuthorize("hasAuthority('media:view')")
     @Operation(summary = "Get recently played media for current user")
     public ApiResponse<List<MediaItemResponse>> getRecentPlayed(
             @AuthenticationPrincipal SysUser user,
@@ -30,6 +32,7 @@ public class UserActivityController {
     }
 
     @GetMapping("/recent/favorites")
+    @PreAuthorize("hasAuthority('media:view')")
     @Operation(summary = "Get recently favorited media for current user")
     public ApiResponse<List<MediaItemResponse>> getRecentFavorites(
             @AuthenticationPrincipal SysUser user,
@@ -38,6 +41,7 @@ public class UserActivityController {
     }
 
     @PostMapping("/play")
+    @PreAuthorize("hasAuthority('media:play')")
     @Operation(summary = "Record a playback event")
     public ApiResponse<Void> recordPlay(
             @AuthenticationPrincipal SysUser user,
@@ -50,6 +54,7 @@ public class UserActivityController {
     }
 
     @PostMapping("/favorite/{mediaItemId}")
+    @PreAuthorize("hasAuthority('media:view')")
     @Operation(summary = "Toggle favorite status for a media item")
     public ApiResponse<Map<String, Boolean>> toggleFavorite(
             @AuthenticationPrincipal SysUser user,
@@ -59,6 +64,7 @@ public class UserActivityController {
     }
 
     @GetMapping("/favorite/{mediaItemId}")
+    @PreAuthorize("hasAuthority('media:view')")
     @Operation(summary = "Check if media item is favorited by current user")
     public ApiResponse<Map<String, Boolean>> isFavorited(
             @AuthenticationPrincipal SysUser user,

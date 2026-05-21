@@ -3,6 +3,7 @@ package com.mediamanager.sync.controller;
 import com.mediamanager.sync.service.SseService;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,6 +25,7 @@ public class SseController {
     // For simplicity right now, accepting requests assuming it's behind secure proxy or using query tokens.
     
     @GetMapping(value = "/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PreAuthorize("hasAuthority('task:view')")
     @Operation(summary = "Connect to SSE Event Stream")
     public SseEmitter streamEvents(@RequestParam(required = false) String clientId) {
         String id = clientId != null && !clientId.isEmpty() ? clientId : UUID.randomUUID().toString();

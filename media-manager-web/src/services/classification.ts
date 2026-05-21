@@ -20,6 +20,14 @@ export async function deleteTag(id: number) {
   return request(`/api/v1/tags/${id}`, { method: 'DELETE' });
 }
 
+export async function addTagToItem(itemId: number, tagId: number) {
+  return request(`/api/v1/tags/items/${itemId}?tagId=${tagId}`, { method: 'POST' });
+}
+
+export async function removeTagFromItem(itemId: number, tagId: number) {
+  return request(`/api/v1/tags/items/${itemId}/${tagId}`, { method: 'DELETE' });
+}
+
 export async function createCategory(data: { name: string; parentId?: number; type?: string }) {
   return request('/api/v1/categories', { method: 'POST', data });
 }

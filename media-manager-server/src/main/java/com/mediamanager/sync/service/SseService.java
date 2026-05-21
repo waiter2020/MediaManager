@@ -2,6 +2,7 @@ package com.mediamanager.sync.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -30,7 +31,11 @@ public class SseService {
         });
         
         emitter.onError((e) -> {
-            log.debug("SSE Emitter error for client: {}", clientId, e);
+            if (isClientDisconnect(e)) {
+                log.debug("SSE client disconnected: {}", clientId);
+            } else {
+                log.debug("SSE Emitter error for client: {}", clientId, e);
+            }
             emitters.remove(clientId);
         });
 
@@ -46,7 +51,11 @@ public class SseService {
             try {
                 emitter.send(SseEmitter.event().name(eventName).data(payload));
             } catch (IOException e) {
-                log.debug("Failed to send SSE event to client: {}", clientId);
+                if (isClientDisconnect(e)) {
+                    log.debug("SSE client disconnected while sending: {}", clientId);
+                } else {
+                    log.debug("Failed to send SSE event to client: {}", clientId, e);
+                }
                 emitters.remove(clientId);
             }
         });
@@ -58,9 +67,27 @@ public class SseService {
             try {
                 emitter.send(SseEmitter.event().name(eventName).data(payload));
             } catch (IOException e) {
-                log.debug("Failed to send targeted SSE event to client: {}", clientId);
+                if (isClientDisconnect(e)) {
+                    log.debug("SSE client disconnected while sending: {}", clientId);
+                } else {
+                    log.debug("Failed to send targeted SSE event to client: {}", clientId, e);
+                }
                 emitters.remove(clientId);
             }
         }
+    }
+
+    private boolean isClientDisconnect(Throwable e) {
+        if (e == null) return false;
+        if (e instanceof AsyncRequestNotUsableException) return true;
+        Throwable cur = e;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null && msg.toLowerCase().contains("broken pipe")) {
+                return true;
+            }
+            cur = cur.getCause();
+        }
+        return false;
     }
 }

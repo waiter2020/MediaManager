@@ -19,6 +19,7 @@ export interface MediaFile {
 export interface MediaItem {
   id: number;
   libraryId: number;
+  libraryName?: string;
   title: string;
   originalTitle?: string;
   sortTitle?: string;
@@ -34,5 +35,37 @@ export interface MediaItem {
   files?: MediaFile[];
   tags?: { id: number; name: string; color?: string }[];
   categories?: { id: number; name: string }[];
+  movieMetadata?: {
+    tagline?: string;
+    runtimeMinutes?: number;
+    certification?: string;
+    genres?: string[];
+    studios?: string[];
+  };
+  imageMetadata?: {
+    width?: number;
+    height?: number;
+    cameraMake?: string;
+    cameraModel?: string;
+    lens?: string;
+    iso?: string;
+    aperture?: string;
+    shutterSpeed?: string;
+    takenAt?: string;
+    gpsLatitude?: number;
+    gpsLongitude?: number;
+  };
+  audioMetadata?: {
+    artist?: string;
+    album?: string;
+    albumArtist?: string;
+    trackNumber?: number;
+    discNumber?: number;
+    genres?: string[];
+    durationSeconds?: number;
+    bitrate?: number;
+    sampleRate?: number;
+    channels?: number;
+  };
 }
 

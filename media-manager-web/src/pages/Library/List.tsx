@@ -15,6 +15,7 @@ import {
   SortAscendingOutlined,
   ClockCircleOutlined,
   DatabaseOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 import { history, useModel } from '@umijs/max';
 import { getLibraries, deleteLibrary, triggerScan } from '@/services/library';
@@ -310,6 +311,17 @@ const LibraryList: React.FC = () => {
                           icon={<SyncOutlined spin={isScanning} />}
                           onClick={(e) => handleScan(e, lib.id)}
                           disabled={isScanning}
+                        />
+                      </Tooltip>
+                      <Tooltip title="插件配置">
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<ApiOutlined />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            history.push(`/libraries/${lib.id}/plugins`);
+                          }}
                         />
                       </Tooltip>
                       <Tooltip title="编辑">

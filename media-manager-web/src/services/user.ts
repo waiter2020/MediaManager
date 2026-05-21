@@ -24,8 +24,19 @@ export async function assignRoles(id: number, data: { roleCodes: string[] }) {
   return request(`/api/v1/users/${id}/roles`, { method: 'PUT', data });
 }
 
-export async function setLibraryAccess(id: number, data: any) {
+export async function getLibraryAccess(id: number) {
+  return request(`/api/v1/users/${id}/library-access`, { method: 'GET' });
+}
+
+export async function setLibraryAccess(id: number, data: { items: LibraryAccessItem[] }) {
   return request(`/api/v1/users/${id}/library-access`, { method: 'PUT', data });
+}
+
+export interface LibraryAccessItem {
+  libraryId: number;
+  canView?: boolean;
+  canEdit?: boolean;
+  canDeleteFile?: boolean;
 }
 
 export async function getCurrentUser() {

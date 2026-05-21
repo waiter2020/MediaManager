@@ -7,12 +7,14 @@ import {
   SortAscendingOutlined,
   SearchOutlined,
   CloseOutlined,
+  DeleteOutlined,
   VideoCameraOutlined,
   PictureOutlined,
   CustomerServiceOutlined,
 } from '@ant-design/icons';
-import { history } from '@umijs/max';
+import { history, useAccess } from '@umijs/max';
 import { getItems } from '@/services/media';
+import { getLibraries } from '@/services/library';
 import { getTags, getCategoryTree } from '@/services/classification';
 import MediaCard from '@/components/MediaCard';
 import EmptyState from '@/components/EmptyState';
@@ -35,6 +37,7 @@ const SORT_OPTIONS = [
 ];
 
 const MediaBrowse: React.FC = () => {
+  const access = useAccess();
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -48,10 +51,12 @@ const MediaBrowse: React.FC = () => {
   const [sortBy, setSortBy] = useState('createdAt,desc');
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
   const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
+  const [selectedLibraryId, setSelectedLibraryId] = useState<number | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
 
   const [allTags, setAllTags] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [libraries, setLibraries] = useState<any[]>([]);
 
   useEffect(() => {
     getTags().then((res) => {
@@ -59,6 +64,9 @@ const MediaBrowse: React.FC = () => {
     });
     getCategoryTree().then((res) => {
       if (res.code === 200) setCategories(flattenCategories(res.data || []));
+    });
+    getLibraries().then((res) => {
+      if (res.code === 200) setLibraries(res.data || []);
     });
   }, []);
 
@@ -78,10 +86,13 @@ const MediaBrowse: React.FC = () => {
         const res = await getItems({
           keyword: keyword || undefined,
           type: type || undefined,
+          libraryId: selectedLibraryId ?? undefined,
           tagIds: selectedTags.length > 0 ? selectedTags : undefined,
           categoryIds: selectedCategories.length > 0 ? selectedCategories : undefined,
           page: p,
           size: s,
+          sortField,
+          sortOrder: sortOrder as 'asc' | 'desc',
         });
         if (res?.code === 200 && res?.data) {
           setItems(res.data.items || []);
@@ -91,22 +102,23 @@ const MediaBrowse: React.FC = () => {
         setLoading(false);
       }
     },
-    [keyword, type, sortBy, selectedTags, selectedCategories, page, pageSize],
+    [keyword, type, sortBy, selectedLibraryId, selectedTags, selectedCategories, page, pageSize],
   );
 
   useEffect(() => {
     setPage(1);
     fetchItems(1);
-  }, [keyword, type, sortBy, selectedTags, selectedCategories]);
+  }, [keyword, type, sortBy, selectedLibraryId, selectedTags, selectedCategories]);
 
   useEffect(() => {
     fetchItems(page);
   }, [page]);
 
   const activeFilterCount =
-    selectedTags.length + selectedCategories.length;
+    (selectedLibraryId != null ? 1 : 0) + selectedTags.length + selectedCategories.length;
 
   const clearFilters = () => {
+    setSelectedLibraryId(null);
     setSelectedTags([]);
     setSelectedCategories([]);
   };
@@ -144,6 +156,7 @@ const MediaBrowse: React.FC = () => {
           rating={item.rating}
           releaseDate={item.releaseDate}
           overview={item.overview}
+          libraryName={item.libraryName}
           onClick={() => history.push(`/media/${item.id}`)}
         />
       ))}
@@ -191,6 +204,7 @@ const MediaBrowse: React.FC = () => {
             <div className="media-list-title">{item.title}</div>
             <div className="media-list-meta">
               {item.type && <Tag color="blue">{item.type}</Tag>}
+              {item.libraryName && <Tag>{item.libraryName}</Tag>}
               {item.releaseDate && (
                 <span className="media-list-date">{item.releaseDate}</span>
               )}
@@ -268,6 +282,14 @@ const MediaBrowse: React.FC = () => {
           )}
         </div>
         <div className="browse-toolbar-right">
+          {access.canDeleteMedia && (
+            <Button
+              icon={<DeleteOutlined />}
+              onClick={() => history.push('/recycle-bin')}
+            >
+              回收站
+            </Button>
+          )}
           <Select
             value={sortBy}
             onChange={setSortBy}
@@ -290,6 +312,17 @@ const MediaBrowse: React.FC = () => {
       {/* Active filter tags */}
       {activeFilterCount > 0 && (
         <div className="browse-active-filters">
+          {selectedLibraryId != null && (() => {
+            const lib = libraries.find((l: any) => l.id === selectedLibraryId);
+            return lib ? (
+              <Tag
+                closable
+                onClose={() => setSelectedLibraryId(null)}
+              >
+                {lib.name}
+              </Tag>
+            ) : null;
+          })()}
           {selectedTags.map((tid) => {
             const tag = allTags.find((t) => t.id === tid);
             return tag ? (
@@ -365,6 +398,20 @@ const MediaBrowse: React.FC = () => {
           </Button>
         }
       >
+        <div className="filter-section">
+          <div className="filter-label">媒体库</div>
+          <Select
+            allowClear
+            placeholder="全部媒体库"
+            style={{ width: '100%' }}
+            options={[
+              { label: '全部', value: null },
+              ...libraries.map((lib: any) => ({ label: lib.name, value: lib.id })),
+            ]}
+            value={selectedLibraryId}
+            onChange={(v) => setSelectedLibraryId(v ?? null)}
+          />
+        </div>
         <div className="filter-section">
           <div className="filter-label">标签</div>
           <Select

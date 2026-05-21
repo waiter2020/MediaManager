@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Tag, Spin, Result, Modal, Form, Input, InputNumber, Tabs, Popconfirm, message } from 'antd';
+import { Button, Tag, Spin, Result, Modal, Form, Input, InputNumber, Tabs, Popconfirm, message, Typography, Select } from 'antd';
 import { useParams, history } from '@umijs/max';
 import {
   PlayCircleFilled,
@@ -19,8 +19,8 @@ import {
   HeartOutlined,
   HeartFilled,
 } from '@ant-design/icons';
-import { getItem, updateMetadata, refreshMetadata, deleteItem, deleteSourceFile } from '@/services/media';
-import { getTags } from '@/services/classification';
+import { getItemDetail, updateMetadata, refreshMetadata, deleteItem, deleteSourceFile, identifyItem, searchTmdbCandidates } from '@/services/media';
+import { getTags, addTagToItem, removeTagFromItem } from '@/services/classification';
 import { getRawImageUrl } from '@/services/stream';
 import { toggleFavorite, checkFavorite } from '@/services/userActivity';
 import './Detail.css';
@@ -131,11 +131,18 @@ const MediaDetail: React.FC = () => {
   const [editVisible, setEditVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [isFavorited, setIsFavorited] = useState(false);
+  const [allTags, setAllTags] = useState<any[]>([]);
+  const [addingTag, setAddingTag] = useState(false);
+  const [addTagSelectValue, setAddTagSelectValue] = useState<number | undefined>(undefined);
+  const [identifyVisible, setIdentifyVisible] = useState(false);
+  const [identifyForm] = Form.useForm();
+  const [tmdbCandidates, setTmdbCandidates] = useState<any[]>([]);
+  const [tmdbSearchLoading, setTmdbSearchLoading] = useState(false);
 
   const fetchItem = async () => {
     setLoading(true);
     try {
-      const res = await getItem(Number(id));
+      const res = await getItemDetail(Number(id));
       if (res.code === 200) setData(res.data);
     } finally {
       setLoading(false);
@@ -151,6 +158,12 @@ const MediaDetail: React.FC = () => {
     }
   }, [id]);
 
+  useEffect(() => {
+    getTags().then((res) => {
+      if (res.code === 200) setAllTags(res.data || []);
+    });
+  }, []);
+
   const handleToggleFavorite = async () => {
     const res = await toggleFavorite(Number(id));
     if (res?.code === 200) {
@@ -165,8 +178,59 @@ const MediaDetail: React.FC = () => {
     if (res.code === 200) { message.success('元数据更新成功'); setEditVisible(false); fetchItem(); }
   };
   const handleRefresh = async () => { await refreshMetadata(Number(id)); message.success('元数据刷新已触发'); setTimeout(fetchItem, 2000); };
-  const handleDelete = async () => { await deleteItem(Number(id)); message.success('媒体项已删除'); history.push('/browse'); };
+  const handleTmdbSearch = async (q: string) => {
+    if (!q?.trim()) {
+      setTmdbCandidates([]);
+      return;
+    }
+    setTmdbSearchLoading(true);
+    try {
+      const res = await searchTmdbCandidates(Number(id), q.trim());
+      if (res.code === 200) setTmdbCandidates(res.data || []);
+    } finally {
+      setTmdbSearchLoading(false);
+    }
+  };
+
+  const handleIdentify = async () => {
+    const values = await identifyForm.validateFields();
+    const res = await identifyItem(Number(id), { provider: 'tmdb', externalId: String(values.externalId) });
+    if (res.code === 200) {
+      message.success('手动匹配成功');
+      setIdentifyVisible(false);
+      fetchItem();
+    }
+  };
+  const handleDelete = async () => {
+    await deleteItem(Number(id));
+    message.success('已移入回收站，可在回收站中恢复');
+    history.push('/browse');
+  };
   const handleDeleteFile = async () => { await deleteSourceFile(Number(id)); message.success('源文件已删除'); fetchItem(); };
+
+  const handleAddTag = async (tagId: number) => {
+    setAddingTag(true);
+    try {
+      const res = await addTagToItem(Number(id), tagId);
+      if (res?.code === 200) {
+        message.success('已添加标签');
+        setAddTagSelectValue(undefined);
+        fetchItem();
+      } else message.error(res?.message || '添加失败');
+    } finally {
+      setAddingTag(false);
+    }
+  };
+
+  const handleRemoveTag = async (tagId: number) => {
+    try {
+      const res = await removeTagFromItem(Number(id), tagId);
+      if (res?.code === 200) { message.success('已移除标签'); fetchItem(); }
+      else message.error(res?.message || '移除失败');
+    } catch (e) {
+      message.error('移除失败');
+    }
+  };
 
   if (loading) return <div className="detail-loading"><Spin size="large" /></div>;
   if (!data) return <Result status="404" title="未找到媒体记录" />;
@@ -256,15 +320,40 @@ const MediaDetail: React.FC = () => {
           ))}
         </div>
       )}
-      {((data.tags && data.tags.length > 0) || (data.categories && data.categories.length > 0)) && (
-        <div className="detail-tags-section">
-          <h3 className="detail-section-title">标签 & 分类</h3>
-          <div className="detail-tags">
-            {data.tags?.map((t: any) => <Tag key={t.id} color={t.color || 'blue'}>{t.name}</Tag>)}
-            {data.categories?.map((c: any) => <Tag key={`cat-${c.id}`}>{c.name}</Tag>)}
-          </div>
+      <div className="detail-tags-section">
+        <h3 className="detail-section-title">标签 & 分类</h3>
+        <div className="detail-tags">
+          {data.tags?.map((t: any) => (
+            <Tag
+              key={t.id}
+              color={t.color || 'blue'}
+              closable
+              onClose={() => handleRemoveTag(t.id)}
+            >
+              {t.name}
+            </Tag>
+          ))}
+          {data.categories?.map((c: any) => <Tag key={`cat-${c.id}`}>{c.name}</Tag>)}
         </div>
-      )}
+        <div style={{ marginTop: 8 }}>
+          <Select
+            placeholder="添加标签"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 200 }}
+            loading={addingTag}
+            value={addTagSelectValue}
+            onChange={(tagId: number) => {
+              if (tagId != null) handleAddTag(tagId);
+              else setAddTagSelectValue(undefined);
+            }}
+            options={allTags
+              .filter((t) => !data.tags?.some((ct: any) => ct.id === t.id))
+              .map((t) => ({ label: t.name, value: t.id }))}
+          />
+        </div>
+      </div>
     </div>
   );
 
@@ -294,6 +383,14 @@ const MediaDetail: React.FC = () => {
               <HddOutlined className="file-icon" />
               <span className="file-name">{f.fileName}</span>
             </div>
+            {f.filePath && (
+              <div className="file-path-row">
+                <span className="spec-label">完整路径</span>
+                <Typography.Text copyable={{ text: f.filePath }} ellipsis={{ tooltip: f.filePath }} style={{ display: 'block', marginTop: 4 }}>
+                  {f.filePath}
+                </Typography.Text>
+              </div>
+            )}
             <div className="file-specs">
               {f.fileSize > 0 && <div className="file-spec-item"><span className="spec-label">大小</span><span className="spec-value">{fmtSize(f.fileSize)}</span></div>}
               {f.mimeType && <div className="file-spec-item"><span className="spec-label">格式</span><span className="spec-value">{f.mimeType}</span></div>}
@@ -356,6 +453,7 @@ const MediaDetail: React.FC = () => {
                 setEditVisible(true);
               }}>编辑</Button>
               <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新元数据</Button>
+              <Button onClick={() => setIdentifyVisible(true)}>TMDb 匹配</Button>
               <Popconfirm title="确定删除此媒体项？" onConfirm={handleDelete}>
                 <Button danger icon={<DeleteOutlined />}>删除</Button>
               </Popconfirm>
@@ -375,6 +473,40 @@ const MediaDetail: React.FC = () => {
           ]}
         />
       </div>
+
+      <Modal
+        title="TMDb 手动匹配"
+        open={identifyVisible}
+        onCancel={() => { setIdentifyVisible(false); setTmdbCandidates([]); }}
+        onOk={handleIdentify}
+        width={560}
+      >
+        <Form form={identifyForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item label="搜索影片">
+            <Input.Search
+              placeholder="输入片名搜索"
+              loading={tmdbSearchLoading}
+              onSearch={handleTmdbSearch}
+              enterButton="搜索"
+            />
+          </Form.Item>
+          {tmdbCandidates.length > 0 && (
+            <Form.Item label="选择匹配结果">
+              <Select
+                placeholder="从搜索结果选择"
+                options={tmdbCandidates.map((c) => ({
+                  value: String(c.id),
+                  label: `${c.title}${c.releaseDate ? ` (${c.releaseDate})` : ''}`,
+                }))}
+                onChange={(v) => identifyForm.setFieldValue('externalId', v)}
+              />
+            </Form.Item>
+          )}
+          <Form.Item name="externalId" label="TMDb ID" rules={[{ required: true, message: '请选择或输入 TMDb ID' }]}>
+            <Input placeholder="例如 27205" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       {/* Edit modal */}
       <Modal title="编辑元数据" open={editVisible} onCancel={() => setEditVisible(false)} onOk={handleEditSave} width={560}>

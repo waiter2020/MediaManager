@@ -9,9 +9,8 @@ import {
   CheckCircleOutlined,
 } from '@ant-design/icons';
 import { history, useModel } from '@umijs/max';
-import { getItems } from '@/services/media';
+import { getDiscover } from '@/services/discover';
 import { getSystemInfo } from '@/services/system';
-import { getRecentPlayed, getRecentFavorites } from '@/services/userActivity';
 import HorizontalMediaRow from '@/components/HorizontalMediaRow';
 import EmptyState from '@/components/EmptyState';
 import type { ScanProgress } from '@/models/global';
@@ -80,17 +79,17 @@ const Dashboard: React.FC = () => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [infoRes, recentRes, playedRes, favRes] = await Promise.all([
+        const [infoRes, discoverRes] = await Promise.all([
           getSystemInfo(),
-          getItems({ page: 1, size: 20 }),
-          getRecentPlayed({ limit: 20 }).catch(() => null),
-          getRecentFavorites({ limit: 20 }).catch(() => null),
+          getDiscover(20).catch(() => null),
         ]);
 
         if (infoRes?.code === 200) setStats(infoRes.data);
-        if (recentRes?.code === 200) setRecentItems(recentRes.data?.items || []);
-        if (playedRes?.code === 200) setRecentPlayedItems(playedRes.data || []);
-        if (favRes?.code === 200) setRecentFavoriteItems(favRes.data || []);
+        if (discoverRes?.code === 200 && discoverRes.data) {
+          setRecentItems(discoverRes.data.recentlyAdded || []);
+          setRecentPlayedItems(discoverRes.data.continueWatching || []);
+          setRecentFavoriteItems(discoverRes.data.recommended || []);
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -162,7 +161,7 @@ const Dashboard: React.FC = () => {
         {recentFavoriteItems.length > 0 && (
           <div className="recent-section">
             <HorizontalMediaRow
-              title="最近收藏"
+              title="为你推荐"
               items={recentFavoriteItems}
               loading={loading}
             />

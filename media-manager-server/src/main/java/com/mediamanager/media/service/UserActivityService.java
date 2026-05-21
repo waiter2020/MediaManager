@@ -81,7 +81,9 @@ public class UserActivityService {
         List<UserPlaybackHistory> records = playbackRepository
                 .findByUserIdOrderByPlayedAtDesc(userId, PageRequest.of(0, limit));
         return records.stream()
-                .map(r -> toResponse(r.getMediaItem()))
+                .map(UserPlaybackHistory::getMediaItem)
+                .filter(this::isVisible)
+                .map(this::toResponse)
                 .collect(Collectors.toList());
     }
 
@@ -90,20 +92,29 @@ public class UserActivityService {
         List<UserFavorite> records = favoriteRepository
                 .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, limit));
         return records.stream()
-                .map(r -> toResponse(r.getMediaItem()))
+                .map(UserFavorite::getMediaItem)
+                .filter(this::isVisible)
+                .map(this::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    private boolean isVisible(MediaItem item) {
+        return item != null
+                && !Boolean.TRUE.equals(item.getHidden())
+                && item.getLibrary() != null;
     }
 
     private MediaItemResponse toResponse(MediaItem item) {
         Float rating = item.getRating() != null ? item.getRating().floatValue() : null;
 
-        List<Integer> fileIds = fileRepository.findByMediaItemId(item.getId()).stream()
+        List<Integer> fileIds = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId()).stream()
                 .map(MediaFile::getId)
                 .collect(Collectors.toList());
 
         return MediaItemResponse.builder()
                 .id(item.getId())
                 .libraryId(item.getLibrary().getId())
+                .libraryName(item.getLibrary().getName())
                 .title(item.getTitle())
                 .type(item.getType())
                 .status(item.getStatus())

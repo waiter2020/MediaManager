@@ -5,6 +5,8 @@ import com.mediamanager.library.entity.LibraryPath;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.repository.MediaLibraryRepository;
 import com.mediamanager.sync.service.SseService;
+import com.mediamanager.system.dto.SystemLogEventDto;
+import com.mediamanager.system.service.SystemLogBroadcaster;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -40,17 +42,41 @@ public class LibraryScanService {
     public void scanLibraryAsync(Integer libraryId) {
         log.info("Starting scan for library: {}", libraryId);
         sseService.broadcast("scan-start", "Started scanning library ID: " + libraryId);
+        SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                .timestamp(System.currentTimeMillis())
+                .level("INFO")
+                .source("TASK")
+                .type("SCAN_START")
+                .libraryId(libraryId)
+                .message("Started scanning library ID: " + libraryId)
+                .build());
 
         MediaLibrary library = loadLibrary(libraryId);
         if (library == null) {
             log.error("Library not found for scan: {}", libraryId);
             sseService.broadcast("scan-end", "Library ID " + libraryId + " not found");
+            SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                    .timestamp(System.currentTimeMillis())
+                    .level("ERROR")
+                    .source("TASK")
+                    .type("SCAN_ERROR")
+                    .libraryId(libraryId)
+                    .message("Library not found for scan: " + libraryId)
+                    .build());
             return;
         }
 
         if (library.getPaths().isEmpty()) {
             log.warn("Library '{}' has no paths configured, nothing to scan", library.getName());
             sseService.broadcast("scan-end", "Library '" + library.getName() + "' has no paths configured");
+            SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                    .timestamp(System.currentTimeMillis())
+                    .level("WARN")
+                    .source("TASK")
+                    .type("SCAN_SKIPPED")
+                    .libraryId(libraryId)
+                    .message("Library '" + library.getName() + "' has no paths configured, nothing to scan")
+                    .build());
             return;
         }
 
@@ -89,6 +115,14 @@ public class LibraryScanService {
                 library.getName(), totalFiles.get(), matchedFiles.get(), library.getType(), newFiles.get());
         log.info(summary);
         sseService.broadcast("scan-end", summary);
+        SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                .timestamp(System.currentTimeMillis())
+                .level("INFO")
+                .source("TASK")
+                .type("SCAN_DONE")
+                .libraryId(libraryId)
+                .message(summary)
+                .build());
 
         activeScans.remove(libraryId);
 
@@ -100,6 +134,14 @@ public class LibraryScanService {
                     fileScanProcessor.getExpectedExtensions(library.getType()));
             log.warn(hint);
             sseService.broadcast("scan-progress", hint);
+            SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                    .timestamp(System.currentTimeMillis())
+                    .level("WARN")
+                    .source("TASK")
+                    .type("SCAN_WARNING")
+                    .libraryId(libraryId)
+                    .message(hint)
+                    .build());
         }
     }
 

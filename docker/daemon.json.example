@@ -1,0 +1,9 @@
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run"
+  ],
+  "features": {
+    "buildkit": true
+  }
+}

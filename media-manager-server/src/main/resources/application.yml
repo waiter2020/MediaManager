@@ -69,11 +69,25 @@ mediamanager:
   # FFmpeg
   ffmpeg:
     path: ffmpeg
+  hls:
+    segment-duration: 6
+  ai:
+    default-provider: ollama
+    classifier:
+      enabled: true
+    ollama:
+      base-url: ${MEDIAMANAGER_AI_OLLAMA_BASE_URL:http://localhost:11434}
   # Data directories
   data:
     cache-dir: ./data/cache
     thumbnail-dir: ./data/cache/thumbnails
     image-cache-dir: ./data/cache/images
+  # Metadata scraper
+  scraper:
+    cron: "0 0 4 * * ?"         # Daily scrape at 4 AM
+    batch-size: 50               # Items per batch
+    request-delay-ms: 2000       # Delay between requests (anti-ban)
+    timeout-seconds: 30          # HTTP request timeout
 
 # SpringDoc
 springdoc:

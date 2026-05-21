@@ -14,17 +14,37 @@ import java.util.Set;
 public class MediaItemSpecification {
 
     public static Specification<MediaItem> filterBy(
-            Integer libraryId,
+            Set<Integer> libraryIds,
             String type,
             String keyword,
             Set<Integer> categoryIds,
             Set<Integer> tagIds) {
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, true);
+    }
+
+    public static Specification<MediaItem> filterBy(
+            Set<Integer> libraryIds,
+            String type,
+            String keyword,
+            Set<Integer> categoryIds,
+            Set<Integer> tagIds,
+            boolean visibleOnly) {
 
         return (root, query, criteriaBuilder) -> {
             List<Predicate> predicates = new ArrayList<>();
 
-            if (libraryId != null) {
-                predicates.add(criteriaBuilder.equal(root.get("library").get("id"), libraryId));
+            if (visibleOnly) {
+                predicates.add(criteriaBuilder.equal(root.get("hidden"), false));
+            }
+
+            if (libraryIds != null) {
+                if (libraryIds.isEmpty()) {
+                    predicates.add(criteriaBuilder.disjunction()); // always false
+                } else if (libraryIds.size() == 1) {
+                    predicates.add(criteriaBuilder.equal(root.get("library").get("id"), libraryIds.iterator().next()));
+                } else {
+                    predicates.add(root.get("library").get("id").in(libraryIds));
+                }
             }
 
             if (type != null && !type.isEmpty()) {

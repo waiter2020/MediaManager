@@ -108,6 +108,22 @@ public class UserService {
         return toResponse(userRepository.save(user));
     }
 
+    @Transactional(readOnly = true)
+    public List<LibraryAccessRequest.LibraryAccessItem> getLibraryAccess(Integer userId) {
+        userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        return libraryAccessRepository.findByUser_Id(userId).stream()
+                .map(la -> {
+                    LibraryAccessRequest.LibraryAccessItem item = new LibraryAccessRequest.LibraryAccessItem();
+                    item.setLibraryId(la.getLibraryId());
+                    item.setCanView(la.getCanView());
+                    item.setCanEdit(la.getCanEdit());
+                    item.setCanDeleteFile(la.getCanDeleteFile());
+                    return item;
+                })
+                .collect(Collectors.toList());
+    }
+
     @Transactional
     public void setLibraryAccess(Integer userId, LibraryAccessRequest request) {
         SysUser user = userRepository.findById(userId)

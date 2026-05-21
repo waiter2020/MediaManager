@@ -1,5 +1,7 @@
 # MediaManager — 里程碑规划
 
+> **Legacy**：验收标记可能超前于实现。请以 [`docs/v2/11-implementation-plan.md`](./v2/11-implementation-plan.md) 与 [`docs/v2/appendix-gap-legacy.md`](./v2/appendix-gap-legacy.md) 为准。
+
 ## 总体时间线
 
 ```mermaid

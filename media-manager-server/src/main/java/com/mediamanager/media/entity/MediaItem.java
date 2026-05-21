@@ -80,6 +80,10 @@ public class MediaItem {
     private Instant lastScannedAt;
 
     @Builder.Default
+    @Column(nullable = false)
+    private Boolean hidden = false;
+
+    @Builder.Default
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(
         name = "media_item_tag",

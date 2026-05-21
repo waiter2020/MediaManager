@@ -11,6 +11,9 @@ import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.mapper.MediaLibraryMapper;
 import com.mediamanager.library.repository.MediaLibraryRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.common.security.SecurityCurrentUser;
+import com.mediamanager.plugin.service.LibraryPluginConfigService;
+import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +31,9 @@ public class MediaLibraryService {
     private final MediaLibraryMapper mapper;
     private final LibraryScanService scanService;
     private final MediaItemRepository mediaItemRepository;
+    private final LibraryAccessService libraryAccessService;
+    private final LibraryPluginConfigService libraryPluginConfigService;
+    private final SecurityCurrentUser securityCurrentUser;
 
     @Transactional
     public MediaLibraryResponse createLibrary(MediaLibraryCreateRequest request) {
@@ -60,15 +66,18 @@ public class MediaLibraryService {
         }
 
         libraryRepository.save(library);
+        libraryPluginConfigService.syncFromExtractorConfigs(library.getId());
         return mapper.toResponse(library);
     }
 
     @Transactional(readOnly = true)
     public List<MediaLibraryResponse> getAllLibraries() {
+        var allowed = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
         return libraryRepository.findAll().stream()
+                .filter(lib -> allowed.contains(lib.getId()))
                 .map(lib -> {
                     MediaLibraryResponse resp = mapper.toResponse(lib);
-                    resp.setTotalItems(mediaItemRepository.countByLibrary_Id(lib.getId()));
+                    resp.setTotalItems(mediaItemRepository.countByLibrary_IdAndHiddenFalse(lib.getId()));
                     return resp;
                 })
                 .collect(Collectors.toList());
@@ -76,15 +85,17 @@ public class MediaLibraryService {
 
     @Transactional(readOnly = true)
     public MediaLibraryResponse getLibraryById(Integer id) {
+        libraryAccessService.assertCanViewLibrary(id);
         MediaLibrary library = libraryRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.LIBRARY_NOT_FOUND));
         MediaLibraryResponse resp = mapper.toResponse(library);
-        resp.setTotalItems(mediaItemRepository.countByLibrary_Id(id));
+        resp.setTotalItems(mediaItemRepository.countByLibrary_IdAndHiddenFalse(id));
         return resp;
     }
 
     @Transactional
     public MediaLibraryResponse updateLibrary(Integer id, MediaLibraryUpdateRequest request) {
+        libraryAccessService.assertCanViewLibrary(id);
         MediaLibrary library = libraryRepository.findWithDetailsById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.LIBRARY_NOT_FOUND));
 
@@ -117,11 +128,13 @@ public class MediaLibraryService {
         }
 
         libraryRepository.save(library);
+        libraryPluginConfigService.syncFromExtractorConfigs(id);
         return mapper.toResponse(library);
     }
 
     @Transactional
     public void deleteLibrary(Integer id) {
+        libraryAccessService.assertCanViewLibrary(id);
         MediaLibrary library = libraryRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.LIBRARY_NOT_FOUND));
         libraryRepository.delete(library);
@@ -129,6 +142,7 @@ public class MediaLibraryService {
 
     @Transactional
     public void triggerScan(Integer id) {
+        libraryAccessService.assertCanViewLibrary(id);
         if (!libraryRepository.existsById(id)) {
             throw new BusinessException(ErrorCode.LIBRARY_NOT_FOUND);
         }
@@ -136,11 +150,12 @@ public class MediaLibraryService {
     }
 
     public Map<String, Object> getLibraryStats(Integer id) {
+        libraryAccessService.assertCanViewLibrary(id);
         MediaLibrary library = libraryRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.LIBRARY_NOT_FOUND));
 
         Map<String, Object> stats = new HashMap<>();
-        long itemCount = mediaItemRepository.countByLibrary_Id(id);
+        long itemCount = mediaItemRepository.countByLibrary_IdAndHiddenFalse(id);
         stats.put("totalItems", itemCount);
         stats.put("libraryName", library.getName());
         stats.put("libraryType", library.getType());

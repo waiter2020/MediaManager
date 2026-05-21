@@ -31,6 +31,7 @@ interface MediaCardProps {
   rating?: number | null;
   releaseDate?: string | null;
   overview?: string | null;
+  libraryName?: string | null;
   onClick?: () => void;
 }
 
@@ -43,6 +44,7 @@ const MediaCard: React.FC<MediaCardProps> = ({
   rating,
   releaseDate,
   overview,
+  libraryName,
   onClick,
 }) => {
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -96,6 +98,11 @@ const MediaCard: React.FC<MediaCardProps> = ({
             {type && (
               <span className="media-card-badge type-badge">
                 {TYPE_LABELS[type] || type}
+              </span>
+            )}
+            {libraryName && (
+              <span className="media-card-badge library-badge" title={libraryName}>
+                {libraryName}
               </span>
             )}
             {rating != null && rating > 0 && (

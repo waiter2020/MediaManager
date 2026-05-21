@@ -11,6 +11,7 @@ import java.util.List;
 public class MediaItemResponse {
     private Integer id;
     private Integer libraryId;
+    private String libraryName;
     private String title;
     private String type;
     private String status;

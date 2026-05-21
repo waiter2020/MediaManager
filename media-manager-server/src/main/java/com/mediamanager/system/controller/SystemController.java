@@ -6,6 +6,7 @@ import com.mediamanager.library.dto.ScanProgressDTO;
 import com.mediamanager.library.repository.MediaLibraryRepository;
 import com.mediamanager.library.service.LibraryScanService;
 import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.system.dto.SystemLogEventDto;
 import com.mediamanager.system.repository.SysConfigRepository;
 import com.mediamanager.system.repository.SysUserRepository;
 import com.mediamanager.system.dto.DirectoryDTO;
@@ -14,6 +15,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
 
 import java.io.File;
 import java.util.ArrayList;
@@ -46,6 +49,7 @@ public class SystemController {
     }
 
     @GetMapping("/directories")
+    @PreAuthorize("hasAuthority('library:create')")
     @Operation(summary = "List server directories")
     public ApiResponse<List<DirectoryDTO>> listDirectories(@RequestParam(required = false) String path) {
         List<DirectoryDTO> directories = new ArrayList<>();
@@ -118,6 +122,7 @@ public class SystemController {
     }
 
     @GetMapping("/scan/status")
+    @PreAuthorize("hasAuthority('task:view')")
     @Operation(summary = "Get active scan progress snapshot")
     public ApiResponse<java.util.Collection<ScanProgressDTO>> getScanStatus() {
         return ApiResponse.success(libraryScanService.getActiveScans().values());
@@ -131,14 +136,34 @@ public class SystemController {
         info.put("javaVersion", System.getProperty("java.version"));
         info.put("totalUsers", userRepository.count());
         info.put("totalLibraries", libraryRepository.count());
-        info.put("totalMediaItems", mediaItemRepository.count());
+        info.put("totalMediaItems", mediaItemRepository.countByHiddenFalse());
         info.put("setupCompleted", userRepository.count() > 0);
-        // Per-type media counts for dashboard
-        info.put("videoCount", mediaItemRepository.countByType("MOVIE") + mediaItemRepository.countByType("TV_SHOW"));
-        info.put("imageCount", mediaItemRepository.countByType("IMAGE"));
-        info.put("audioCount", mediaItemRepository.countByType("AUDIO"));
+        // Per-type media counts for dashboard (exclude hidden / recycle-only items)
+        info.put("videoCount", mediaItemRepository.countByTypeAndHiddenFalse("MOVIE")
+                + mediaItemRepository.countByTypeAndHiddenFalse("TV_SHOW"));
+        info.put("imageCount", mediaItemRepository.countByTypeAndHiddenFalse("IMAGE"));
+        info.put("audioCount", mediaItemRepository.countByTypeAndHiddenFalse("AUDIO"));
         info.put("tagCount", tagRepository.count());
         return ApiResponse.success(info);
+    }
+
+    @GetMapping("/logs/recent")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get recent system log events")
+    public ApiResponse<java.util.List<SystemLogEventDto>> getRecentLogs() {
+        java.util.List<SystemLogEventDto> events = com.mediamanager.system.service.SystemLogBroadcaster
+                .getInstance()
+                .getRecentEventsSnapshot();
+        return ApiResponse.success(events);
+    }
+
+    @GetMapping("/logs/stream")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Stream system logs via SSE")
+    public SseEmitter streamLogs() {
+        return com.mediamanager.system.service.SystemLogBroadcaster
+                .getInstance()
+                .registerEmitter();
     }
 }
 
