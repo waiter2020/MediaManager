@@ -1,5 +1,7 @@
 package com.mediamanager.media.service;
 
+import com.mediamanager.system.service.SysConfigService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -8,6 +10,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Generates video thumbnails using ffmpeg.
@@ -15,13 +18,20 @@ import java.nio.file.Path;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ThumbnailService {
 
+    private final SysConfigService sysConfigService;
+
     @Value("${mediamanager.ffmpeg.path:ffmpeg}")
-    private String ffmpegPath;
+    private String yamlFfmpegPath;
 
     @Value("${mediamanager.data.thumbnail-dir:./data/cache/thumbnails}")
     private String thumbnailDir;
+
+    private String ffmpegPath() {
+        return sysConfigService.ffmpegPath(yamlFfmpegPath);
+    }
 
     /**
      * Generate a thumbnail for a video file.
@@ -46,7 +56,7 @@ public class ThumbnailService {
 
             // Extract a frame at 10 seconds into the video
             ProcessBuilder pb = new ProcessBuilder(
-                    ffmpegPath,
+                    ffmpegPath(),
                     "-ss", "10",
                     "-i", videoFilePath,
                     "-vframes", "1",
@@ -60,7 +70,13 @@ public class ThumbnailService {
             Process process = pb.start();
             // Consume output to prevent buffer deadlock
             process.getInputStream().readAllBytes();
-            int exitCode = process.waitFor();
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("ffmpeg thumbnail generation timed out for item {}", mediaItemId);
+                return retryAtOneSecond(mediaItemId, videoFilePath, outputFile);
+            }
+            int exitCode = process.exitValue();
 
             if (exitCode != 0) {
                 log.warn("ffmpeg thumbnail generation exited with code {} for item {}", exitCode, mediaItemId);
@@ -89,7 +105,7 @@ public class ThumbnailService {
     private String retryAtOneSecond(Integer mediaItemId, String videoFilePath, String outputFile) {
         try {
             ProcessBuilder pb = new ProcessBuilder(
-                    ffmpegPath,
+                    ffmpegPath(),
                     "-ss", "1",
                     "-i", videoFilePath,
                     "-vframes", "1",
@@ -101,7 +117,13 @@ public class ThumbnailService {
             pb.redirectErrorStream(true);
             Process process = pb.start();
             process.getInputStream().readAllBytes();
-            int exitCode = process.waitFor();
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("Retry thumbnail generation timed out for item {}", mediaItemId);
+                return null;
+            }
+            int exitCode = process.exitValue();
 
             if (exitCode == 0 && new File(outputFile).exists() && new File(outputFile).length() > 0) {
                 log.info("Generated thumbnail (retry at 1s) for item {}", mediaItemId);
@@ -111,5 +133,104 @@ public class ThumbnailService {
             log.error("Retry thumbnail generation failed for item {}", mediaItemId, e);
         }
         return null;
+    }
+
+    /**
+     * Generate an animated WebP preview clip for a video.
+     * Extracts a 3-second segment starting at 10 seconds (or 1 second on retry) and encodes as animated WebP.
+     *
+     * @param mediaItemId ID of the media item
+     * @param videoFilePath absolute path to the video file
+     * @return absolute path to the generated preview WebP, or null on failure
+     */
+    public String generatePreviewWebp(Integer mediaItemId, String videoFilePath) {
+        try {
+            Path dir = Path.of(thumbnailDir);
+            Files.createDirectories(dir);
+
+            String outputFile = dir.resolve(mediaItemId + "_preview.webp").toAbsolutePath().toString();
+
+            if (new File(outputFile).exists()) {
+                log.debug("Preview WebP already exists for item {}", mediaItemId);
+                return outputFile;
+            }
+
+            // Generate an animated WebP using ffmpeg
+            // Start at 10 seconds, duration 3 seconds, scale to width 320, aspect ratio kept, 12 fps, loop forever (loop 0)
+            ProcessBuilder pb = new ProcessBuilder(
+                    ffmpegPath(),
+                    "-ss", "10",
+                    "-i", videoFilePath,
+                    "-t", "3",
+                    "-vf", "scale=320:-1:flags=lanczos,fps=12",
+                    "-loop", "0",
+                    "-y",
+                    outputFile
+            );
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+            process.getInputStream().readAllBytes(); // consume input stream
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("ffmpeg WebP preview generation timed out for item {}", mediaItemId);
+                return null;
+            }
+            int exitCode = process.exitValue();
+            if (exitCode != 0) {
+                log.warn("ffmpeg WebP preview generation exited with code {} for item {}, attempting fallback at 1s", exitCode, mediaItemId);
+                return retryPreviewAtOneSecond(mediaItemId, videoFilePath, outputFile);
+            }
+
+            if (new File(outputFile).exists() && new File(outputFile).length() > 0) {
+                log.info("Generated preview WebP for item {}: {}", mediaItemId, outputFile);
+                return outputFile;
+            }
+            return null;
+        } catch (Exception e) {
+            log.error("Failed to generate preview WebP for item {}", mediaItemId, e);
+            return null;
+        }
+    }
+
+    private String retryPreviewAtOneSecond(Integer mediaItemId, String videoFilePath, String outputFile) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    ffmpegPath(),
+                    "-ss", "1",
+                    "-i", videoFilePath,
+                    "-t", "2",
+                    "-vf", "scale=320:-1:flags=lanczos,fps=12",
+                    "-loop", "0",
+                    "-y",
+                    outputFile
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+            process.getInputStream().readAllBytes();
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                return null;
+            }
+            if (process.exitValue() == 0 && new File(outputFile).exists() && new File(outputFile).length() > 0) {
+                log.info("Generated preview WebP (retry at 1s) for item {}", mediaItemId);
+                return outputFile;
+            }
+        } catch (Exception e) {
+            log.error("Retry preview WebP generation failed for item {}", mediaItemId, e);
+        }
+        return null;
+    }
+
+    /**
+     * Resolve the absolute path of the generated preview WebP.
+     *
+     * @param mediaItemId ID of the media item
+     * @return absolute path string
+     */
+    public String getPreviewWebpPath(Integer mediaItemId) {
+        return Path.of(thumbnailDir).resolve(mediaItemId + "_preview.webp").toAbsolutePath().toString();
     }
 }

@@ -1,6 +1,6 @@
 package com.mediamanager.metadata.service.extractor;
 
-import com.mediamanager.library.entity.LibraryExtractorConfig;
+import com.mediamanager.plugin.entity.LibraryPluginConfig;
 import com.mediamanager.metadata.spi.MetadataExtractor;
 import com.mediamanager.metadata.spi.MetadataResult;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +28,7 @@ public class NfoExtractor implements MetadataExtractor {
     }
 
     @Override
-    public MetadataResult extract(ExtractorContext context, LibraryExtractorConfig config) {
+    public MetadataResult extract(ExtractorContext context, LibraryPluginConfig config) {
         if (context.primaryFile() == null) return null;
         String videoPathStr = context.primaryFile().getFilePath();
         Path videoPath = Paths.get(videoPathStr);

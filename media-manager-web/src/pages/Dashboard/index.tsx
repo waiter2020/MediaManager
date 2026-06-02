@@ -1,44 +1,37 @@
 import React, { useEffect, useState } from 'react';
 import {
-  VideoCameraOutlined,
-  PictureOutlined,
+  CheckCircleOutlined,
   CustomerServiceOutlined,
   FolderOutlined,
-  TagsOutlined,
+  PictureOutlined,
   SyncOutlined,
-  CheckCircleOutlined,
+  TagsOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons';
-import { history, useModel } from '@umijs/max';
-import { getDiscover } from '@/services/discover';
-import { getSystemInfo } from '@/services/system';
-import HorizontalMediaRow from '@/components/HorizontalMediaRow';
+import { history, useAccess, useModel } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
+import HorizontalMediaRow from '@/components/HorizontalMediaRow';
+import SystemCapabilitiesCard from '@/components/SystemCapabilitiesCard';
+import UnifiedSearchBox from '@/components/UnifiedSearchBox';
+import { getDiscover } from '@/services/discover';
+import { getSystemInfo, type SystemInfo } from '@/services/system';
 import type { ScanProgress } from '@/models/global';
+import type { MediaItem } from '@/types/media';
 import './index.css';
 
-interface SystemInfo {
-  totalMediaItems?: number;
-  totalLibraries?: number;
-  totalUsers?: number;
-  videoCount?: number;
-  imageCount?: number;
-  audioCount?: number;
-  tagCount?: number;
-  version?: string;
+type StatField = 'videoCount' | 'imageCount' | 'audioCount' | 'totalLibraries' | 'tagCount' | 'totalMediaItems';
+
+interface StatCard {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  cls: string;
+  field: StatField;
+  fallback?: StatField;
+  link: string;
 }
 
-interface RecentMediaItem {
-  id: number;
-  title: string;
-  type?: string;
-  posterPath?: string | null;
-  fileIds?: number[];
-  rating?: number | null;
-  releaseDate?: string | null;
-  overview?: string | null;
-}
-
-const STAT_CARDS = [
+const STAT_CARDS: StatCard[] = [
   { key: 'video', icon: <VideoCameraOutlined />, label: '视频', cls: 'stat-video', field: 'videoCount', fallback: 'totalMediaItems', link: '/browse' },
   { key: 'image', icon: <PictureOutlined />, label: '图片', cls: 'stat-image', field: 'imageCount', link: '/browse' },
   { key: 'audio', icon: <CustomerServiceOutlined />, label: '音频', cls: 'stat-audio', field: 'audioCount', link: '/browse' },
@@ -50,28 +43,24 @@ function formatNumber(n: number): string {
   return n.toLocaleString('zh-CN');
 }
 
-
 const ScanSummaryStatCard: React.FC<{ scans: Record<number, ScanProgress> }> = ({ scans }) => {
   const activeCount = Object.keys(scans).length;
   const hasActive = activeCount > 0;
 
   return (
     <div className={`stat-card stat-scan${hasActive ? ' stat-scan-active' : ''}`}>
-      <div className="stat-icon">
-        {hasActive ? <SyncOutlined spin /> : <CheckCircleOutlined />}
-      </div>
+      <div className="stat-icon">{hasActive ? <SyncOutlined spin /> : <CheckCircleOutlined />}</div>
       <div className="stat-value">{hasActive ? activeCount : '--'}</div>
       <div className="stat-label">{hasActive ? '扫描中' : '扫描空闲'}</div>
     </div>
   );
 };
 
-
 const Dashboard: React.FC = () => {
+  const access = useAccess();
   const [stats, setStats] = useState<SystemInfo | null>(null);
-  const [recentItems, setRecentItems] = useState<RecentMediaItem[]>([]);
-  const [recentPlayedItems, setRecentPlayedItems] = useState<RecentMediaItem[]>([]);
-  const [recentFavoriteItems, setRecentFavoriteItems] = useState<RecentMediaItem[]>([]);
+  const [recentItems, setRecentItems] = useState<MediaItem[]>([]);
+  const [continueWatching, setContinueWatching] = useState<MediaItem[]>([]);
   const [loading, setLoading] = useState(true);
   const { scanStatus } = useModel('global');
 
@@ -87,11 +76,8 @@ const Dashboard: React.FC = () => {
         if (infoRes?.code === 200) setStats(infoRes.data);
         if (discoverRes?.code === 200 && discoverRes.data) {
           setRecentItems(discoverRes.data.recentlyAdded || []);
-          setRecentPlayedItems(discoverRes.data.continueWatching || []);
-          setRecentFavoriteItems(discoverRes.data.recommended || []);
+          setContinueWatching(discoverRes.data.continueWatching || []);
         }
-      } catch (e) {
-        console.error(e);
       } finally {
         setLoading(false);
       }
@@ -99,80 +85,73 @@ const Dashboard: React.FC = () => {
     fetchData();
   }, []);
 
-  const getStatValue = (card: typeof STAT_CARDS[number]) => {
+  const getStatValue = (card: StatCard) => {
     if (!stats) return 0;
-    const val = (stats as any)[card.field];
-    if (val !== undefined && val !== null) return val;
-    if ((card as any).fallback) return (stats as any)[(card as any).fallback] || 0;
-    return 0;
+    const value = stats[card.field];
+    if (typeof value === 'number') return value;
+    const fallbackValue = card.fallback ? stats[card.fallback] : undefined;
+    return typeof fallbackValue === 'number' ? fallbackValue : 0;
   };
 
   return (
     <div className="dashboard-page">
       <h2>仪表盘</h2>
+      <UnifiedSearchBox className="dashboard-search" placeholder="搜索媒体，或输入自然语言条件" />
 
       <div className="stat-cards">
-        {loading
-          ? Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="stat-card-skeleton">
-                <div className="skeleton-circle" />
-                <div className="skeleton-number" />
-                <div className="skeleton-label" />
+        {loading ? (
+          Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="stat-card-skeleton">
+              <div className="skeleton-circle" />
+              <div className="skeleton-number" />
+              <div className="skeleton-label" />
+            </div>
+          ))
+        ) : (
+          <>
+            {STAT_CARDS.map((card) => (
+              <div
+                key={card.key}
+                className={`stat-card ${card.cls}`}
+                onClick={() => history.push(card.link)}
+                role="button"
+                tabIndex={0}
+              >
+                <div className="stat-icon">{card.icon}</div>
+                <div className="stat-value">{formatNumber(getStatValue(card))}</div>
+                <div className="stat-label">{card.label}</div>
               </div>
-            ))
-          : (<>
-              {STAT_CARDS.map((card) => (
-                <div
-                  key={card.key}
-                  className={`stat-card ${card.cls}`}
-                  onClick={() => card.link && history.push(card.link)}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <div className="stat-icon">{card.icon}</div>
-                  <div className="stat-value">{formatNumber(getStatValue(card))}</div>
-                  <div className="stat-label">{card.label}</div>
-                </div>
-              ))}
-              <ScanSummaryStatCard scans={scanStatus} />
-            </>)}
+            ))}
+            <ScanSummaryStatCard scans={scanStatus} />
+          </>
+        )}
       </div>
 
+      {access.canManageSystem && <SystemCapabilitiesCard />}
+
       <div className="dashboard-main">
-        <div className="recent-section">
+        {continueWatching.length > 0 && (
           <HorizontalMediaRow
-            title="最近添加"
-            items={recentItems}
-            viewAllLink="/browse"
+            title="继续观看"
+            items={continueWatching}
+            viewAllLink="/discover"
+            playMode="resume"
             loading={loading}
           />
+        )}
+        <div className="recent-section">
+          <HorizontalMediaRow title="最近添加" items={recentItems} viewAllLink="/browse" loading={loading} />
         </div>
 
-        {recentPlayedItems.length > 0 && (
-          <div className="recent-section">
-            <HorizontalMediaRow
-              title="最近播放"
-              items={recentPlayedItems}
-              loading={loading}
-            />
-          </div>
-        )}
-
-        {recentFavoriteItems.length > 0 && (
-          <div className="recent-section">
-            <HorizontalMediaRow
-              title="为你推荐"
-              items={recentFavoriteItems}
-              loading={loading}
-            />
-          </div>
-        )}
-
-        {!loading && recentItems.length === 0 && (
+        {!loading && recentItems.length === 0 && continueWatching.length === 0 && (
           <EmptyState
-            description="还没有媒体内容，添加媒体库开始管理你的媒体吧"
-            actionText="添加媒体库"
-            onAction={() => history.push('/libraries/create')}
+            description={
+              stats?.hasViewableLibraries === false
+                ? '当前账号没有可访问的媒体库。管理员请在用户管理中分配库权限。'
+                : '还没有媒体内容。创建媒体库、配置路径并扫描后即可在此看到新内容。'
+            }
+            actionText={stats?.hasViewableLibraries === false ? undefined : '添加媒体库'}
+            onAction={stats?.hasViewableLibraries === false ? undefined : () => history.push('/libraries/create')}
           />
         )}
       </div>

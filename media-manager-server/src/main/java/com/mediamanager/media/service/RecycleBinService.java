@@ -6,8 +6,6 @@ import com.mediamanager.media.dto.MediaFileDto;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaFileRepository;
-import com.mediamanager.media.repository.MediaItemRepository;
-import com.mediamanager.search.service.FtsIndexService;
 import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -22,16 +20,15 @@ import java.util.stream.Collectors;
 public class RecycleBinService {
 
     private final MediaFileRepository fileRepository;
-    private final MediaItemRepository itemRepository;
-    private final FtsIndexService ftsIndexService;
     private final LibraryAccessService libraryAccessService;
+    private final MediaFileLifecycleService mediaFileLifecycleService;
 
     @Transactional(readOnly = true)
     public List<MediaFileDto> listDeleted() {
         return fileRepository.findDeletedWithItemAndLibrary().stream()
                 .filter(file -> {
                     try {
-                        libraryAccessService.assertCanViewFile(file);
+                        libraryAccessService.assertCanViewRecycleFile(file);
                         return true;
                     } catch (BusinessException e) {
                         return false;
@@ -45,49 +42,27 @@ public class RecycleBinService {
     public void restore(Integer fileId) {
         MediaFile file = fileRepository.findByIdWithItemAndLibrary(fileId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND));
-        libraryAccessService.assertCanViewFile(file);
-        if (!Boolean.TRUE.equals(file.getDeleted())) {
-            return;
-        }
-        file.setDeleted(false);
-        file.setDeletedAt(null);
-        fileRepository.save(file);
-        MediaItem item = file.getMediaItem();
-        if (Boolean.TRUE.equals(item.getHidden())) {
-            item.setHidden(false);
-            itemRepository.save(item);
-            ftsIndexService.indexItem(item);
-        }
+        libraryAccessService.assertCanViewRecycleFile(file);
+        mediaFileLifecycleService.restoreFile(file, file.getFilePath());
     }
 
     @Transactional
     public void purgeRecord(Integer fileId) {
-        MediaFile file = fileRepository.findByIdWithItemAndLibrary(fileId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND));
-        libraryAccessService.assertCanViewFile(file);
-        MediaItem item = file.getMediaItem();
-        Integer itemId = item.getId();
-        fileRepository.delete(file);
-        if (fileRepository.findByMediaItemId(itemId).isEmpty()) {
-            ftsIndexService.removeItem(itemId);
-            itemRepository.deleteById(itemId);
-        }
+        purgeRecord(fileId, false);
     }
 
     @Transactional
+    public void purgeRecord(Integer fileId, boolean deleteSourceFile) {
+        MediaFile file = fileRepository.findByIdWithItemAndLibrary(fileId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND));
+        libraryAccessService.assertCanPurgeRecycleFile(file);
+        mediaFileLifecycleService.purgeRecord(file, deleteSourceFile, false);
+    }
+
+    /** System job: permanently remove expired soft-deleted files (all libraries). */
+    @Transactional
     public int purgeExpired(Instant before) {
-        List<MediaFile> expired = fileRepository.findDeletedBefore(before);
-        int count = 0;
-        for (MediaFile file : expired) {
-            Integer itemId = file.getMediaItem() != null ? file.getMediaItem().getId() : null;
-            fileRepository.delete(file);
-            count++;
-            if (itemId != null && fileRepository.findByMediaItemId(itemId).isEmpty()) {
-                ftsIndexService.removeItem(itemId);
-                itemRepository.deleteById(itemId);
-            }
-        }
-        return count;
+        return mediaFileLifecycleService.purgeExpired(before);
     }
 
     private MediaFileDto toDto(MediaFile file) {

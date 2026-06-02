@@ -11,6 +11,7 @@ import com.mediamanager.media.repository.UserFavoriteRepository;
 import com.mediamanager.media.repository.UserPlaybackHistoryRepository;
 import com.mediamanager.system.entity.SysUser;
 import com.mediamanager.system.repository.SysUserRepository;
+import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,9 +32,13 @@ public class UserActivityService {
     private final MediaItemRepository mediaItemRepository;
     private final MediaFileRepository fileRepository;
     private final SysUserRepository userRepository;
+    private final LibraryAccessService libraryAccessService;
 
     @Transactional
     public void recordPlayback(Integer userId, Integer mediaItemId, Integer position) {
+        MediaItem item = mediaItemRepository.findById(mediaItemId).orElseThrow();
+        libraryAccessService.assertCanViewItem(item);
+
         var existing = playbackRepository.findByUserIdAndMediaItemId(userId, mediaItemId);
         if (existing.isPresent()) {
             UserPlaybackHistory record = existing.get();
@@ -42,7 +49,6 @@ public class UserActivityService {
             playbackRepository.save(record);
         } else {
             SysUser user = userRepository.findById(userId).orElseThrow();
-            MediaItem item = mediaItemRepository.findById(mediaItemId).orElseThrow();
             UserPlaybackHistory record = UserPlaybackHistory.builder()
                     .user(user)
                     .mediaItem(item)
@@ -55,13 +61,15 @@ public class UserActivityService {
 
     @Transactional
     public boolean toggleFavorite(Integer userId, Integer mediaItemId) {
+        MediaItem item = mediaItemRepository.findById(mediaItemId).orElseThrow();
+        libraryAccessService.assertCanViewItem(item);
+
         var existing = favoriteRepository.findByUserIdAndMediaItemId(userId, mediaItemId);
         if (existing.isPresent()) {
             favoriteRepository.delete(existing.get());
             return false;
         } else {
             SysUser user = userRepository.findById(userId).orElseThrow();
-            MediaItem item = mediaItemRepository.findById(mediaItemId).orElseThrow();
             UserFavorite fav = UserFavorite.builder()
                     .user(user)
                     .mediaItem(item)
@@ -78,30 +86,38 @@ public class UserActivityService {
 
     @Transactional(readOnly = true)
     public List<MediaItemResponse> getRecentPlayed(Integer userId, int limit) {
+        Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(
+                Optional.of(userRepository.findById(userId).orElseThrow()));
         List<UserPlaybackHistory> records = playbackRepository
                 .findByUserIdOrderByPlayedAtDesc(userId, PageRequest.of(0, limit));
         return records.stream()
-                .map(UserPlaybackHistory::getMediaItem)
-                .filter(this::isVisible)
-                .map(this::toResponse)
+                .filter(rec -> isVisible(rec.getMediaItem(), viewableLibraryIds))
+                .map(rec -> {
+                    MediaItemResponse resp = toResponse(rec.getMediaItem());
+                    resp.setPlaybackPosition(rec.getPosition());
+                    return resp;
+                })
                 .collect(Collectors.toList());
     }
 
     @Transactional(readOnly = true)
     public List<MediaItemResponse> getRecentFavorites(Integer userId, int limit) {
+        Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(
+                Optional.of(userRepository.findById(userId).orElseThrow()));
         List<UserFavorite> records = favoriteRepository
                 .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, limit));
         return records.stream()
                 .map(UserFavorite::getMediaItem)
-                .filter(this::isVisible)
+                .filter(item -> isVisible(item, viewableLibraryIds))
                 .map(this::toResponse)
                 .collect(Collectors.toList());
     }
 
-    private boolean isVisible(MediaItem item) {
+    private boolean isVisible(MediaItem item, Set<Integer> viewableLibraryIds) {
         return item != null
                 && !Boolean.TRUE.equals(item.getHidden())
-                && item.getLibrary() != null;
+                && item.getLibrary() != null
+                && viewableLibraryIds.contains(item.getLibrary().getId());
     }
 
     private MediaItemResponse toResponse(MediaItem item) {

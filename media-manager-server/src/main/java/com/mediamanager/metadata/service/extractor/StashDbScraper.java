@@ -3,9 +3,11 @@ package com.mediamanager.metadata.service.extractor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mediamanager.library.entity.LibraryExtractorConfig;
-import com.mediamanager.metadata.spi.MetadataExtractor;
+import com.mediamanager.media.entity.MediaFile;
+import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.metadata.spi.MetadataResult;
+import com.mediamanager.metadata.spi.MetadataScraper;
+import com.mediamanager.plugin.entity.LibraryPluginConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -17,29 +19,15 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Scrapes metadata from StashDB / ThePornDB via GraphQL API.
- *
- * Config JSON (in LibraryExtractorConfig.config):
- * {
- *   "endpoint": "https://theporndb.net/graphql",
- *   "apiKey": "your-api-key"
- * }
- *
- * Alternatively use StashDB:
- * {
- *   "endpoint": "https://stashdb.org/graphql",
- *   "apiKey": "your-stashdb-api-key"
- * }
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class StashDbExtractor implements MetadataExtractor {
+public class StashDbScraper implements MetadataScraper {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -97,7 +85,7 @@ public class StashDbExtractor implements MetadataExtractor {
     }
 
     @Override
-    public MetadataResult extract(ExtractorContext context, LibraryExtractorConfig config) {
+    public MetadataResult scrape(ScrapeContext context, LibraryPluginConfig config) {
         if (context.primaryFile() == null) return null;
 
         String endpoint = extractConfigValue(config.getConfig(), "endpoint", DEFAULT_ENDPOINT);
@@ -109,15 +97,12 @@ public class StashDbExtractor implements MetadataExtractor {
             return null;
         }
 
-        // Build search query from accumulated title or filename
         String searchQuery = Optional.ofNullable(context.currentAccumulatedResult().getTitle())
                 .orElse(context.primaryFile().getFileName());
 
-        // Clean up search query (remove extensions, common markers)
         searchQuery = cleanSearchQuery(searchQuery);
 
         try {
-            // Step 1: Search for scenes
             JsonNode searchResult = executeGraphQL(endpoint, apiKey, SEARCH_SCENE_QUERY,
                     Map.of("term", searchQuery));
 
@@ -127,7 +112,6 @@ public class StashDbExtractor implements MetadataExtractor {
                 return null;
             }
 
-            // Use first match
             JsonNode scene = scenes.get(0);
             return parseSceneNode(scene, endpoint);
 
@@ -138,19 +122,80 @@ public class StashDbExtractor implements MetadataExtractor {
         }
     }
 
+    @Override
+    public List<Map<String, Object>> searchCandidates(String query, LibraryPluginConfig config, String mediaType, String language) {
+        return searchCandidates(query, config.getConfig());
+    }
+
+    @Override
+    public MetadataResult fetchByExternalId(String externalId, LibraryPluginConfig config, String mediaType, String language) {
+        return fetchBySceneId(externalId, config.getConfig());
+    }
+
+    public List<Map<String, Object>> searchCandidates(String query, String configJson) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        String endpoint = extractConfigValue(configJson, "endpoint", DEFAULT_ENDPOINT);
+        String apiKey = extractConfigValue(configJson, "apiKey", null);
+        if (apiKey == null || apiKey.isEmpty()) {
+            return List.of();
+        }
+        try {
+            JsonNode searchResult = executeGraphQL(endpoint, apiKey, SEARCH_SCENE_QUERY,
+                    Map.of("term", cleanSearchQuery(query)));
+            JsonNode scenes = searchResult.path("data").path("searchScene").path("scenes");
+            if (!scenes.isArray()) {
+                return List.of();
+            }
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (JsonNode scene : scenes) {
+                Map<String, Object> row = new HashMap<>();
+                row.put("externalId", scene.path("id").asText());
+                row.put("title", scene.path("title").asText(""));
+                row.put("date", scene.path("date").asText(""));
+                row.put("provider", endpoint.contains("stashdb") ? "stashdb" : "porndb");
+                out.add(row);
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("StashDB search failed for {}: {}", query, e.getMessage());
+            return List.of();
+        }
+    }
+
+    public MetadataResult fetchBySceneId(String sceneId, String configJson) {
+        if (sceneId == null || sceneId.isBlank()) {
+            return null;
+        }
+        String endpoint = extractConfigValue(configJson, "endpoint", DEFAULT_ENDPOINT);
+        String apiKey = extractConfigValue(configJson, "apiKey", null);
+        if (apiKey == null || apiKey.isEmpty()) {
+            log.warn("StashDB API key not configured for identify");
+            return null;
+        }
+        try {
+            JsonNode result = executeGraphQL(endpoint, apiKey, FIND_SCENE_QUERY, Map.of("id", sceneId));
+            JsonNode scene = result.path("data").path("findScene");
+            if (scene.isMissingNode() || scene.isNull()) {
+                return null;
+            }
+            return parseSceneNode(scene, endpoint);
+        } catch (Exception e) {
+            log.error("Failed to fetch StashDB scene {}: {}", sceneId, e.getMessage());
+            return null;
+        }
+    }
+
     private MetadataResult parseSceneNode(JsonNode scene, String endpoint) {
         MetadataResult result = MetadataResult.builder().build();
-
-        // Title
         result.setTitle(scene.path("title").asText(null));
 
-        // Overview/details
         String details = scene.path("details").asText(null);
         if (details != null && !details.isEmpty()) {
             result.setOverview(details);
         }
 
-        // Date
         String dateStr = scene.path("date").asText(null);
         if (dateStr != null && !dateStr.isEmpty()) {
             try {
@@ -158,13 +203,11 @@ public class StashDbExtractor implements MetadataExtractor {
             } catch (Exception ignored) {}
         }
 
-        // Duration (in seconds → minutes)
         int duration = scene.path("duration").asInt(0);
         if (duration > 0) {
             result.setRuntimeMinutes((int) Math.round(duration / 60.0));
         }
 
-        // Cover/poster image (first image)
         JsonNode images = scene.path("images");
         if (images.isArray() && !images.isEmpty()) {
             String imageUrl = images.get(0).path("url").asText(null);
@@ -173,13 +216,11 @@ public class StashDbExtractor implements MetadataExtractor {
             }
         }
 
-        // Studio
         JsonNode studio = scene.path("studio");
         if (!studio.isMissingNode() && studio.has("name")) {
             result.setStudios(List.of(studio.path("name").asText()));
         }
 
-        // Tags → genres
         JsonNode tags = scene.path("tags");
         if (tags.isArray()) {
             List<String> genres = new ArrayList<>();
@@ -191,7 +232,6 @@ public class StashDbExtractor implements MetadataExtractor {
             }
         }
 
-        // Performers → cast
         JsonNode performers = scene.path("performers");
         if (performers.isArray()) {
             List<Map<String, String>> castList = new ArrayList<>();
@@ -214,10 +254,8 @@ public class StashDbExtractor implements MetadataExtractor {
             }
         }
 
-        // Provider IDs
         String sceneId = scene.path("id").asText(null);
         if (sceneId != null) {
-            // Determine provider key based on endpoint
             String providerKey = endpoint.contains("stashdb") ? "stashdb" : "porndb";
             result.getProviderIds().put(providerKey, sceneId);
         }
@@ -246,12 +284,10 @@ public class StashDbExtractor implements MetadataExtractor {
 
     private String cleanSearchQuery(String query) {
         if (query == null) return "";
-        // Remove file extension
         int dotIdx = query.lastIndexOf('.');
         if (dotIdx > 0) {
             query = query.substring(0, dotIdx);
         }
-        // Remove common markers
         return query.replaceAll("\\[.*?]", "")
                 .replaceAll("\\(.*?\\)", "")
                 .replaceAll("\\b(1080p|720p|480p|4k|2160p|WEB-DL|BluRay|HEVC|x264|x265|AAC)\\b", "")

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { message } from 'antd';
+import { authHeaders, getAccessToken } from '@/utils/authSession';
 
 export interface ScanProgress {
   libraryId: number;
@@ -29,6 +30,8 @@ export interface ScrapeTaskEvent {
 
 const MAX_EVENTS = 30;
 
+const eventData = (event: Event) => (event as MessageEvent<string>).data;
+
 export default () => {
   const [scanStatus, setScanStatus] = useState<Record<number, ScanProgress>>({});
   const [recentEvents, setRecentEvents] = useState<ScanEvent[]>([]);
@@ -46,14 +49,15 @@ export default () => {
       eventSourceRef.current.close();
     }
 
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken();
     const tokenQ = token ? `&token=${encodeURIComponent(token)}` : '';
     const es = new EventSource(`/api/v1/sse/events?clientId=${clientId}${tokenQ}`);
     eventSourceRef.current = es;
 
-    es.addEventListener('scan-status', (e: any) => {
+    const handleScanProgressPayload = (raw: string) => {
       try {
-        const data: ScanProgress = JSON.parse(e.data);
+        const data: ScanProgress = JSON.parse(raw);
+        if (typeof data.libraryId !== 'number') return;
         setScanStatus((prev) => {
           if (data.status === 'DONE' || data.status === 'ERROR') {
             const next = { ...prev };
@@ -63,44 +67,64 @@ export default () => {
           return { ...prev, [data.libraryId]: data };
         });
       } catch {
-        // ignore malformed payloads
+        addEvent('PROGRESS', raw);
+      }
+    };
+
+    es.addEventListener('scan-status', (e) => handleScanProgressPayload(eventData(e)));
+    es.addEventListener('scan.progress', (e) => handleScanProgressPayload(eventData(e)));
+
+    es.addEventListener('scan-start', (e) => {
+      const data = eventData(e);
+      message.info(data);
+      addEvent('START', data);
+    });
+
+    es.addEventListener('scan-progress', (e) => {
+      addEvent('PROGRESS', eventData(e));
+    });
+
+    es.addEventListener('scan-end', (e) => {
+      const data = eventData(e);
+      message.success(data);
+      addEvent('END', data);
+    });
+
+    es.addEventListener('file-added', (e) => {
+      const data = eventData(e);
+      message.success(`已加入新文件：${data}`);
+      addEvent('FILE', data);
+    });
+
+    es.addEventListener('library.updated', (e) => {
+      const raw = eventData(e);
+      try {
+        const data = JSON.parse(raw);
+        addEvent('LIBRARY', `媒体库 #${data.libraryId} ${data.action}`);
+      } catch {
+        addEvent('LIBRARY', raw);
       }
     });
 
-    es.addEventListener('scan-start', (e: any) => {
-      message.info(e.data);
-      addEvent('START', e.data);
-    });
-
-    es.addEventListener('scan-progress', (e: any) => {
-      addEvent('PROGRESS', e.data);
-    });
-
-    es.addEventListener('scan-end', (e: any) => {
-      message.success(e.data);
-      addEvent('END', e.data);
-    });
-
-    es.addEventListener('file-added', (e: any) => {
-      message.success(`New file added: ${e.data}`);
-      addEvent('FILE', e.data);
-    });
-
-    es.addEventListener('scrape.task.updated', (e: any) => {
+    es.addEventListener('scrape.task.updated', (e) => {
       try {
-        const data: ScrapeTaskEvent = JSON.parse(e.data);
-        setScrapeTasks((prev) => ({ ...prev, [data.taskId]: data }));
-        addEvent('SCRAPE', `任务 #${data.taskId} → ${data.status}`);
-        if (data.status === 'SUCCESS' || data.status === 'FAILED') {
-          message.info(`刮削任务 #${data.taskId} 已结束：${data.status}`);
+        const data: ScrapeTaskEvent = JSON.parse(eventData(e));
+        const normalized: ScrapeTaskEvent = {
+          ...data,
+          status: data.status || (data.scraped != null || data.errors != null ? 'RUNNING' : ''),
+        };
+        setScrapeTasks((prev) => ({ ...prev, [normalized.taskId]: normalized }));
+        addEvent('SCRAPE', `任务 #${normalized.taskId} -> ${normalized.status || 'RUNNING'}`);
+        if (normalized.status === 'SUCCESS' || normalized.status === 'FAILED') {
+          message.info(`刮削任务 #${normalized.taskId} 已结束：${normalized.status}`);
         }
       } catch {
         // ignore malformed payloads
       }
     });
 
-    es.addEventListener('scrape-end', (e: any) => {
-      addEvent('SCRAPE', e.data);
+    es.addEventListener('scrape-end', (e) => {
+      addEvent('SCRAPE', eventData(e));
     });
 
     es.onerror = () => {
@@ -114,9 +138,8 @@ export default () => {
 
   const fetchScanSnapshot = useCallback(async () => {
     try {
-      const token = localStorage.getItem('accessToken');
       const res = await fetch('/api/v1/system/scan/status', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: authHeaders(),
       });
       const json = await res.json();
       if (json.code === 200 && Array.isArray(json.data)) {
@@ -129,11 +152,16 @@ export default () => {
         setScanStatus(map);
       }
     } catch {
-      // silently fail
+      // Keep the shell usable when scan snapshot is temporarily unavailable.
     }
   }, []);
 
   useEffect(() => {
+    const token = getAccessToken();
+    if (!token) {
+      fetchScanSnapshot();
+      return undefined;
+    }
     const clientId = 'global-' + Math.random().toString(36).substring(2, 9);
     const es = connectSse(clientId);
     fetchScanSnapshot();
@@ -141,7 +169,7 @@ export default () => {
       es.close();
       eventSourceRef.current = null;
     };
-  }, []);
+  }, [connectSse, fetchScanSnapshot]);
 
   return { scanStatus, recentEvents, scrapeTasks, connectSse, fetchScanSnapshot };
 };

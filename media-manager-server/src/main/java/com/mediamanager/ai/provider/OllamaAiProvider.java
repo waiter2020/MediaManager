@@ -34,27 +34,42 @@ public class OllamaAiProvider implements AiProvider {
         return true;
     }
 
+    private static final int MAX_RETRIES = 2;
+    private static final long INITIAL_BACKOFF_MS = 500;
+
     @Override
     public float[] embedText(String text, Map<String, Object> config) {
         String baseUrl = str(config, "baseUrl", "http://localhost:11434");
         String model = str(config, "embedModel", "nomic-embed-text");
-        try {
-            Map<String, Object> body = Map.of("model", model, "prompt", text);
-            String resp = restTemplate.postForObject(baseUrl + "/api/embeddings", body, String.class);
-            JsonNode node = objectMapper.readTree(resp);
-            JsonNode embedding = node.path("embedding");
-            if (!embedding.isArray()) {
-                return new float[0];
+        long timeoutMs = longVal(config, "timeoutMs", 60000L);
+        log.debug("Ollama embed request: model={}, timeoutMs={}", model, timeoutMs);
+
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                Map<String, Object> body = Map.of("model", model, "prompt", text);
+                String resp = restTemplate.postForObject(baseUrl + "/api/embeddings", body, String.class);
+                JsonNode node = objectMapper.readTree(resp);
+                JsonNode embedding = node.path("embedding");
+                if (!embedding.isArray()) {
+                    return new float[0];
+                }
+                float[] vec = new float[embedding.size()];
+                for (int i = 0; i < embedding.size(); i++) {
+                    vec[i] = (float) embedding.get(i).asDouble();
+                }
+                return vec;
+            } catch (Exception e) {
+                if (attempt < MAX_RETRIES) {
+                    long backoff = INITIAL_BACKOFF_MS * (1L << attempt);
+                    log.warn("Ollama embed attempt {}/{} failed ({}), retrying in {}ms...",
+                            attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
+                    sleepQuietly(backoff);
+                } else {
+                    log.warn("Ollama embed failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                }
             }
-            float[] vec = new float[embedding.size()];
-            for (int i = 0; i < embedding.size(); i++) {
-                vec[i] = (float) embedding.get(i).asDouble();
-            }
-            return vec;
-        } catch (Exception e) {
-            log.warn("Ollama embed failed: {}", e.getMessage());
-            return new float[0];
         }
+        return new float[0];
     }
 
     @Override
@@ -71,32 +86,94 @@ public class OllamaAiProvider implements AiProvider {
 
     @Override
     public Optional<Map<String, Object>> parseNaturalLanguage(String query, Map<String, Object> config) {
-        String prompt = "Parse media search query into JSON with optional keys: keyword, type, minYear, maxYear, minRating. Query: " + query;
+        String prompt = "Parse media search query into JSON with optional keys: keyword, type, minYear, maxYear, minRating. "
+                + "Return ONLY a raw JSON block, no markdown formatting (no ```json or ```), no additional explanations or conversational filler. "
+                + "Example: query \"2021年评分大于8的电影\" -> {\"keyword\":\"\",\"type\":\"MOVIE\",\"minYear\":2021,\"maxYear\":2021,\"minRating\":8.0}. "
+                + "Query: " + query;
         return chat(prompt, config).map(body -> {
             try {
+                String cleaned = cleanJsonString(body);
                 @SuppressWarnings("unchecked")
-                Map<String, Object> parsed = objectMapper.readValue(body, Map.class);
+                Map<String, Object> parsed = objectMapper.readValue(cleaned, Map.class);
                 return parsed;
             } catch (Exception e) {
+                log.warn("Failed to parse Ollama natural language result: {} (Raw: {})", e.getMessage(), body);
                 return Map.<String, Object>of("keyword", query);
             }
         });
     }
 
+    private String cleanJsonString(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String cleaned = raw.trim();
+        if (cleaned.contains("```")) {
+            int startIdx = cleaned.indexOf("```");
+            if (startIdx != -1) {
+                int newlineIdx = cleaned.indexOf("\n", startIdx);
+                if (newlineIdx != -1) {
+                    int endIdx = cleaned.indexOf("```", newlineIdx);
+                    if (endIdx != -1) {
+                        cleaned = cleaned.substring(newlineIdx + 1, endIdx).trim();
+                    } else {
+                        cleaned = cleaned.substring(newlineIdx + 1).trim();
+                    }
+                }
+            }
+        }
+        return cleaned;
+    }
+
     private Optional<String> chat(String prompt, Map<String, Object> config) {
         String baseUrl = str(config, "baseUrl", "http://localhost:11434");
         String model = str(config, "llmModel", "qwen2.5:7b");
+        long timeoutMs = longVal(config, "timeoutMs", 60000L);
+        log.debug("Ollama chat request: model={}, timeoutMs={}", model, timeoutMs);
+
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                Map<String, Object> body = Map.of(
+                        "model", model,
+                        "prompt", prompt,
+                        "stream", false);
+                String resp = restTemplate.postForObject(baseUrl + "/api/generate", body, String.class);
+                JsonNode node = objectMapper.readTree(resp);
+                return Optional.ofNullable(node.path("response").asText(null));
+            } catch (Exception e) {
+                if (attempt < MAX_RETRIES) {
+                    long backoff = INITIAL_BACKOFF_MS * (1L << attempt);
+                    log.warn("Ollama chat attempt {}/{} failed ({}), retrying in {}ms...",
+                            attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
+                    sleepQuietly(backoff);
+                } else {
+                    log.warn("Ollama chat failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void sleepQuietly(long ms) {
         try {
-            Map<String, Object> body = Map.of(
-                    "model", model,
-                    "prompt", prompt,
-                    "stream", false);
-            String resp = restTemplate.postForObject(baseUrl + "/api/generate", body, String.class);
-            JsonNode node = objectMapper.readTree(resp);
-            return Optional.ofNullable(node.path("response").asText(null));
-        } catch (Exception e) {
-            log.warn("Ollama chat failed: {}", e.getMessage());
-            return Optional.empty();
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private long longVal(Map<String, Object> config, String key, long def) {
+        if (config == null || !config.containsKey(key)) {
+            return def;
+        }
+        Object val = config.get(key);
+        if (val instanceof Number) {
+            return ((Number) val).longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(val));
+        } catch (NumberFormatException e) {
+            return def;
         }
     }
 

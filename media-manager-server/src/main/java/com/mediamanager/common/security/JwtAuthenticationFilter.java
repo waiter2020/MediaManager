@@ -4,6 +4,7 @@ import com.mediamanager.system.entity.SysUser;
 import com.mediamanager.system.repository.SysUserRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -58,7 +59,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
             return bearerToken.substring(7);
         }
-        
+
+        // Fallback to HttpOnly cookie for streaming endpoints
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie cookie : cookies) {
+                if ("mm_stream_token".equals(cookie.getName())
+                        && StringUtils.hasText(cookie.getValue())) {
+                    return cookie.getValue();
+                }
+            }
+        }
+
         // Fallback to query parameter "token" for `<video src="...token=xxx">` and SSE EventSource
         String paramToken = request.getParameter("token");
         if (StringUtils.hasText(paramToken)) {

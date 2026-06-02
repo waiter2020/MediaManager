@@ -2,6 +2,8 @@ server:
   port: 8080
 
 spring:
+  main:
+    allow-circular-references: true
   application:
     name: MediaManager
 
@@ -64,8 +66,8 @@ mediamanager:
     enabled: true
     jwt:
       secret: ${MEDIAMANAGER_AUTH_JWT_SECRET:your-256-bit-secret-key-change-this-in-production-please}
-      access-token-expiration: 7200000    # 2 hours in ms
-      refresh-token-expiration: 604800000 # 7 days in ms
+      access-token-expiration: 2592000000   # 30 days in ms
+      refresh-token-expiration: 15552000000 # 180 days in ms
   # FFmpeg
   ffmpeg:
     path: ffmpeg
@@ -82,6 +84,11 @@ mediamanager:
     cache-dir: ./data/cache
     thumbnail-dir: ./data/cache/thumbnails
     image-cache-dir: ./data/cache/images
+  # Docker path mapping (see docker-compose.yml / .env)
+  storage:
+    path-mappings: ${MEDIAMANAGER_STORAGE_PATH_MAPPINGS:}
+    path-map-from: ${MEDIAMANAGER_STORAGE_PATH_MAP_FROM:}
+    path-map-to: ${MEDIAMANAGER_STORAGE_PATH_MAP_TO:/home/media}
   # Metadata scraper
   scraper:
     cron: "0 0 4 * * ?"         # Daily scrape at 4 AM

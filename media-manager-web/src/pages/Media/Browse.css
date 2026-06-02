@@ -60,6 +60,50 @@
   width: 100%;
 }
 
+.media-grid > div {
+  min-width: 0;
+}
+
+.media-grid > div > input[type='checkbox'] {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(8, 9, 16, 0.78);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+
+.media-grid > div > input[type='checkbox']::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--color-primary);
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.media-grid > div > input[type='checkbox']:checked {
+  border-color: var(--color-primary);
+  background: rgba(47, 125, 246, 0.18);
+}
+
+.media-grid > div > input[type='checkbox']:checked::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.browse-card-selected .media-card-wrapper {
+  border-color: rgba(47, 125, 246, 0.72);
+  box-shadow: 0 0 0 2px rgba(47, 125, 246, 0.16), var(--shadow-card);
+}
+
 /* Media list view */
 .media-list {
   display: flex;

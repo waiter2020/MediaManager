@@ -7,6 +7,7 @@ import com.mediamanager.metadata.dto.ScrapeTaskResponse;
 import com.mediamanager.metadata.entity.ScrapeSchedule;
 import com.mediamanager.metadata.service.ScrapeScheduleService;
 import com.mediamanager.metadata.service.ScrapeTaskService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -40,14 +41,14 @@ public class ScrapeScheduleController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('library:edit')")
-    public ApiResponse<ScrapeScheduleDto> create(@RequestBody ScrapeScheduleDto body) {
+    public ApiResponse<ScrapeScheduleDto> create(@Valid @RequestBody ScrapeScheduleDto body) {
         ScrapeSchedule created = scheduleService.createSchedule(fromDto(body));
         return ApiResponse.success(toDto(created));
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('library:edit')")
-    public ApiResponse<ScrapeScheduleDto> update(@PathVariable Integer id, @RequestBody ScrapeScheduleDto body) {
+    public ApiResponse<ScrapeScheduleDto> update(@PathVariable Integer id, @Valid @RequestBody ScrapeScheduleDto body) {
         ScrapeSchedule updated = scheduleService.updateSchedule(id, fromDto(body));
         return ApiResponse.success(updated != null ? toDto(updated) : null);
     }
@@ -62,7 +63,7 @@ public class ScrapeScheduleController {
      * Trigger a schedule once immediately (creates a scrape_task).
      */
     @PostMapping("/{id}/runOnce")
-    @PreAuthorize("hasAuthority('task:execute')")
+    @PreAuthorize("hasAuthority('task:execute') or hasAuthority('library:edit')")
     public ApiResponse<ScrapeTaskResponse> runOnce(@PathVariable Integer id) {
         ScrapeSchedule schedule = scheduleService.getSchedule(id);
         if (schedule == null) return ApiResponse.success(null);
@@ -115,7 +116,7 @@ public class ScrapeScheduleController {
 
     private ScrapeSchedule fromDto(ScrapeScheduleDto d) {
         MediaLibrary lib = null;
-        if (d.getLibraryId() != null) {
+        if ("LIBRARY".equalsIgnoreCase(d.getScope()) && d.getLibraryId() != null) {
             lib = MediaLibrary.builder().id(d.getLibraryId()).build();
         }
         return ScrapeSchedule.builder()

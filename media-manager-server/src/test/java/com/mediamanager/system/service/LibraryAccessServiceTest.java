@@ -1,4 +1,4 @@
-package com.mediamanager.system;
+package com.mediamanager.system.service;
 
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.repository.MediaLibraryRepository;
@@ -6,7 +6,6 @@ import com.mediamanager.system.entity.LibraryAccess;
 import com.mediamanager.system.entity.SysRole;
 import com.mediamanager.system.entity.SysUser;
 import com.mediamanager.system.repository.LibraryAccessRepository;
-import com.mediamanager.system.service.LibraryAccessService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,6 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -31,15 +31,15 @@ class LibraryAccessServiceTest {
     private MediaLibraryRepository mediaLibraryRepository;
     @Mock
     private com.mediamanager.common.security.SecurityCurrentUser securityCurrentUser;
+    @Mock
+    private SysConfigService sysConfigService;
 
     @InjectMocks
     private LibraryAccessService libraryAccessService;
 
     @BeforeEach
-    void enableAuth() throws Exception {
-        var field = LibraryAccessService.class.getDeclaredField("authEnabled");
-        field.setAccessible(true);
-        field.setBoolean(libraryAccessService, true);
+    void enableAuth() {
+        when(sysConfigService.isEffectiveAuthEnabled(false)).thenReturn(true);
     }
 
     @Test
@@ -81,7 +81,9 @@ class LibraryAccessServiceTest {
         SysRole role = new SysRole();
         role.setCode(code);
         SysUser user = new SysUser();
-        user.setRoles(Set.of(role));
+        HashSet<SysRole> roles = new HashSet<>();
+        roles.add(role);
+        user.setRoles(roles);
         return user;
     }
 }

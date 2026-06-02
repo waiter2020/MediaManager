@@ -3,6 +3,7 @@ package com.mediamanager.media.dto;
 import com.mediamanager.metadata.dto.AudioMetadataDto;
 import com.mediamanager.metadata.dto.ImageMetadataDto;
 import com.mediamanager.metadata.dto.MovieMetadataDto;
+import com.mediamanager.metadata.dto.TvShowMetadataDto;
 import lombok.Builder;
 import lombok.Data;
 
@@ -33,6 +34,7 @@ public class MediaItemDetailResponse {
     private List<CategoryDto> categories;
 
     private MovieMetadataDto movieMetadata;
+    private TvShowMetadataDto tvShowMetadata;
     private ImageMetadataDto imageMetadata;
     private AudioMetadataDto audioMetadata;
 }

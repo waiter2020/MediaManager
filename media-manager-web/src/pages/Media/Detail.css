@@ -43,8 +43,9 @@
   inset: 0;
   background-size: cover;
   background-position: center 20%;
-  filter: blur(24px) brightness(0.35) saturate(1.2);
-  transform: scale(1.15);
+  filter: blur(40px) brightness(0.25) saturate(1.4);
+  transform: scale(1.25);
+  transition: transform var(--transition-slow);
 }
 
 .detail-hero-gradient {
@@ -75,9 +76,15 @@
   width: 200px;
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
   aspect-ratio: 2/3;
   background: #12121e;
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.detail-poster:hover {
+  transform: translateY(-8px) scale(1.03);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.8), 0 0 20px rgba(22, 104, 220, 0.2);
 }
 
 .detail-poster img {
@@ -460,3 +467,80 @@
     left: 8px;
   }
 }
+
+/* ============ Premium Visual Enhancements ============ */
+
+/* Overview cards glassmorphism upgrade */
+.detail-overview-card {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.detail-overview-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* Similar recommendations row hover lift */
+.similar-recommend-card {
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.similar-recommend-card:hover {
+  transform: translateY(-6px) scale(1.03);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 24px rgba(99, 102, 241, 0.15);
+}
+
+/* Favorite button heartbeat animation */
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1); }
+  25% { transform: scale(1.2); }
+  50% { transform: scale(0.95); }
+  75% { transform: scale(1.1); }
+}
+.detail-actions .ant-btn-dangerous .anticon-heart {
+  animation: heartbeat 0.6s ease-in-out;
+}
+
+/* File card premium glass effect */
+.detail-file-card {
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.detail-file-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+}
+
+/* Tags shimmer on hover */
+.detail-tags .ant-tag {
+  transition: all 0.25s ease;
+  cursor: default;
+}
+.detail-tags .ant-tag:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Metadata tab items subtle entrance */
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.detail-meta-item {
+  animation: fadeSlideUp 0.4s ease forwards;
+  opacity: 0;
+}
+.detail-meta-item:nth-child(1) { animation-delay: 0.05s; }
+.detail-meta-item:nth-child(2) { animation-delay: 0.1s; }
+.detail-meta-item:nth-child(3) { animation-delay: 0.15s; }
+.detail-meta-item:nth-child(4) { animation-delay: 0.2s; }
+.detail-meta-item:nth-child(5) { animation-delay: 0.25s; }
+.detail-meta-item:nth-child(6) { animation-delay: 0.3s; }

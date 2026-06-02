@@ -42,6 +42,12 @@ build/
 .vite/
 coverage/
 
+# Playwright e2e artifacts
+media-manager-web/e2e/.auth-token.json
+media-manager-web/e2e/.auth-skip
+media-manager-web/playwright-report/
+media-manager-web/test-results/
+
 # Java / Maven
 target/
 

@@ -2,7 +2,6 @@ package com.mediamanager.library.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
 import java.util.List;
@@ -25,7 +24,7 @@ public class MediaLibraryCreateRequest {
     @NotEmpty(message = "At least one path is required")
     private List<PathReq> paths;
 
-    @NotNull(message = "Extractor configs are required")
+    /** Optional; when omitted the server seeds plugins from {@code type}. */
     private List<ExtractorReq> extractors;
 
     @Data

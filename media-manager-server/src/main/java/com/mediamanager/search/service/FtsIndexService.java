@@ -26,11 +26,25 @@ public class FtsIndexService {
         }
         removeItem(item.getId());
         jdbcTemplate.update(
-                "INSERT INTO media_fts(item_id, title, original_title, overview) VALUES (?, ?, ?, ?)",
+                "INSERT INTO media_fts(item_id, title, original_title, overview, file_names, tags, categories) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 item.getId(),
                 safe(item.getTitle()),
                 safe(item.getOriginalTitle()),
-                safe(item.getOverview()));
+                safe(item.getOverview()),
+                joinColumn("SELECT file_name FROM media_file WHERE media_item_id = ? AND deleted = 0", item.getId()),
+                joinColumn("""
+                        SELECT t.name
+                        FROM tag t
+                        JOIN media_item_tag mit ON mit.tag_id = t.id
+                        WHERE mit.media_item_id = ?
+                        """, item.getId()),
+                joinColumn("""
+                        SELECT c.name
+                        FROM category c
+                        JOIN media_item_category mic ON mic.category_id = c.id
+                        WHERE mic.media_item_id = ?
+                        """, item.getId()));
     }
 
     @Transactional
@@ -72,6 +86,46 @@ public class FtsIndexService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public FtsPage searchPage(String query, Set<Integer> libraryIds, int page, int size) {
+        if (query == null || query.isBlank() || libraryIds == null || libraryIds.isEmpty()) {
+            return new FtsPage(Collections.emptyList(), 0);
+        }
+        String ftsQuery = toFtsQuery(query);
+        if (ftsQuery.isBlank()) {
+            return new FtsPage(Collections.emptyList(), 0);
+        }
+
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.max(size, 1);
+        int offset = (safePage - 1) * safeSize;
+        String inClause = libraryIds.stream().map(id -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(ftsQuery);
+        args.addAll(libraryIds);
+
+        try {
+            String where = " FROM media_fts JOIN media_item m ON m.id = media_fts.item_id "
+                    + "WHERE media_fts MATCH ? "
+                    + "AND (m.hidden = 0 OR m.hidden IS NULL) "
+                    + "AND m.library_id IN (" + inClause + ")";
+
+            Integer total = jdbcTemplate.queryForObject("SELECT COUNT(*)" + where, Integer.class, args.toArray());
+
+            List<Object> pageArgs = new ArrayList<>(args);
+            pageArgs.add(safeSize);
+            pageArgs.add(offset);
+            List<Integer> ids = jdbcTemplate.queryForList(
+                    "SELECT media_fts.item_id" + where + " ORDER BY rank LIMIT ? OFFSET ?",
+                    Integer.class,
+                    pageArgs.toArray());
+            return new FtsPage(ids, total != null ? total : 0);
+        } catch (Exception e) {
+            log.debug("FTS page search failed, caller may fallback: {}", e.getMessage());
+            return new FtsPage(Collections.emptyList(), 0);
+        }
+    }
+
     @Transactional
     public int rebuildAll() {
         jdbcTemplate.update("DELETE FROM media_fts");
@@ -104,4 +158,17 @@ public class FtsIndexService {
     private static String safe(String value) {
         return value != null ? value : "";
     }
+
+    private String joinColumn(String sql, Integer itemId) {
+        try {
+            return jdbcTemplate.queryForList(sql, String.class, itemId).stream()
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.joining(" "));
+        } catch (Exception e) {
+            log.debug("Failed to collect FTS field for item {}: {}", itemId, e.getMessage());
+            return "";
+        }
+    }
+
+    public record FtsPage(List<Integer> itemIds, long total) {}
 }

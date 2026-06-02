@@ -54,7 +54,7 @@ public class ScrapeTaskController {
     }
 
     @PostMapping("/start")
-    @PreAuthorize("hasAuthority('library:edit')")
+    @PreAuthorize("hasAuthority('library:edit') or hasAuthority('task:execute')")
     public ApiResponse<ScrapeTaskResponse> startScrapeAll(@RequestBody(required = false) Map<String, String> body) {
         String targetStatus = body != null ? body.getOrDefault("targetStatus", "UNIDENTIFIED") : "UNIDENTIFIED";
         ScrapeTaskResponse task = scrapeTaskService.startScrape(null, "MANUAL", targetStatus);
@@ -72,7 +72,7 @@ public class ScrapeTaskController {
      *   - targetStatus: "UNIDENTIFIED" (default) | "IDENTIFIED" | "ALL"
      */
     @PostMapping("/start/{libraryId}")
-    @PreAuthorize("hasAuthority('library:edit')")
+    @PreAuthorize("hasAuthority('library:edit') or hasAuthority('task:execute')")
     public ApiResponse<ScrapeTaskResponse> startScrapeLibrary(
             @PathVariable Integer libraryId,
             @RequestBody(required = false) Map<String, String> body) {

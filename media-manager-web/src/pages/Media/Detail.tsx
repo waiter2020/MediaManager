@@ -1,31 +1,66 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Tag, Spin, Result, Modal, Form, Input, InputNumber, Tabs, Popconfirm, message, Typography, Select } from 'antd';
-import { useParams, history } from '@umijs/max';
 import {
-  PlayCircleFilled,
-  EditOutlined,
-  ReloadOutlined,
-  DeleteOutlined,
-  EyeOutlined,
-  VideoCameraOutlined,
-  PictureOutlined,
-  CustomerServiceOutlined,
-  FileOutlined,
-  ClockCircleOutlined,
-  CameraOutlined,
-  AudioOutlined,
-  HddOutlined,
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Result,
+  Spin,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from 'antd';
+import { history, useAccess, useParams } from '@umijs/max';
+import {
   ArrowLeftOutlined,
-  HeartOutlined,
+  AudioOutlined,
+  CameraOutlined,
+  ClockCircleOutlined,
+  CustomerServiceOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  EyeOutlined,
+  FileOutlined,
+  HddOutlined,
   HeartFilled,
+  HeartOutlined,
+  PictureOutlined,
+  PlayCircleFilled,
+  ReloadOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons';
-import { getItemDetail, updateMetadata, refreshMetadata, deleteItem, deleteSourceFile, identifyItem, searchTmdbCandidates } from '@/services/media';
-import { getTags, addTagToItem, removeTagFromItem } from '@/services/classification';
-import { getRawImageUrl } from '@/services/stream';
-import { toggleFavorite, checkFavorite } from '@/services/userActivity';
+import HorizontalMediaRow from '@/components/HorizontalMediaRow';
+import IdentifyModal from '@/components/IdentifyModal';
+import TagSelect from '@/components/TagSelect';
+import TvSeasonPanel, { type TvSeason } from '@/components/TvSeasonPanel';
+import { addTagToItem, getTags, removeTagFromItem, type CategoryItem, type TagItem } from '@/services/classification';
+import {
+  classifyItem,
+  deleteItem,
+  deleteSourceFile,
+  getItem,
+  getItemDetail,
+  getItemSeasons,
+  getSimilarItems,
+  refreshMetadata,
+  syncTvSeasons,
+  updateMetadata,
+} from '@/services/media';
+import { getRawImageUrl, resolveItemBackdropUrl, resolveItemPosterUrl } from '@/services/stream';
+import { checkFavorite, toggleFavorite } from '@/services/userActivity';
+import type { MediaFile, MediaItem } from '@/types/media';
 import './Detail.css';
 
-const TYPE_LABELS: Record<string, string> = { MOVIE: '电影', TV_SHOW: '剧集', IMAGE: '图片', AUDIO: '音频' };
+const TYPE_LABELS: Record<string, string> = {
+  MOVIE: '电影',
+  TV_SHOW: '剧集',
+  IMAGE: '图片',
+  AUDIO: '音频',
+};
+
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   MOVIE: <VideoCameraOutlined />,
   TV_SHOW: <VideoCameraOutlined />,
@@ -33,89 +68,131 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   AUDIO: <CustomerServiceOutlined />,
 };
 
-interface MetaField { label: string; value: string | undefined; icon?: React.ReactNode }
+interface MediaDetailItem extends MediaItem {
+  tvShowMetadata?: {
+    status?: string;
+    network?: string;
+    genres?: string[] | string;
+  };
+}
 
-// --- helpers ---
-const fmtSize = (b: number) => {
-  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
-  if (b >= 1048576) return `${(b / 1048576).toFixed(1)} MB`;
-  return `${(b / 1024).toFixed(1)} KB`;
+interface MetaField {
+  label: string;
+  value?: React.ReactNode;
+  icon?: React.ReactNode;
+}
+
+interface EditableMetadata {
+  title: string;
+  originalTitle?: string;
+  overview?: string;
+  rating?: number;
+  network?: string;
+  tvStatus?: string;
+}
+
+const fmtSize = (bytes?: number) => {
+  if (!bytes || bytes <= 0) return '-';
+  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 };
-const fmtDur = (sec: number) => {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m} 分钟`;
+
+const fmtDur = (seconds?: number) => {
+  if (!seconds || seconds <= 0) return undefined;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m} 分钟`;
 };
 
-// --- ViewModel builders ---
-function buildMovieVM(data: any): { overview: MetaField[]; metadata: MetaField[] } {
-  const m = data.movieMetadata;
-  const overview: MetaField[] = [
-    { label: '类型', value: m?.genres },
-    { label: '片长', value: m?.runtimeMinutes ? fmtDur(m.runtimeMinutes * 60) : undefined, icon: <ClockCircleOutlined /> },
-    { label: '分级', value: m?.certification },
-    { label: '评分', value: data.rating > 0 ? `${data.rating.toFixed(1)} / 10` : undefined },
-  ];
-  const metadata: MetaField[] = [
-    { label: '原始标题', value: data.originalTitle },
-    { label: '宣传语', value: m?.tagline },
-    { label: '制片厂', value: m?.studios },
-    { label: '发行日期', value: data.releaseDate },
-    { label: '添加时间', value: data.createdAt },
-    { label: '状态', value: data.status },
-  ];
-  return { overview, metadata };
-}
+const joinValue = (value?: string[] | string) => (Array.isArray(value) ? value.join(' / ') : value);
 
-function buildImageVM(data: any): { overview: MetaField[]; metadata: MetaField[] } {
-  const img = data.imageMetadata;
-  const overview: MetaField[] = [
-    { label: '尺寸', value: img?.width && img?.height ? `${img.width} × ${img.height}` : undefined, icon: <PictureOutlined /> },
-    { label: '相机', value: img?.cameraMake ? `${img.cameraMake} ${img.cameraModel || ''}`.trim() : undefined, icon: <CameraOutlined /> },
-    { label: '镜头', value: img?.lens },
-    { label: '拍摄时间', value: img?.takenAt, icon: <ClockCircleOutlined /> },
-  ];
-  const metadata: MetaField[] = [
-    { label: 'ISO', value: img?.iso != null ? String(img.iso) : undefined },
-    { label: '光圈', value: img?.aperture },
-    { label: '快门速度', value: img?.shutterSpeed },
-    { label: 'GPS 纬度', value: img?.gpsLatitude != null ? String(img.gpsLatitude) : undefined },
-    { label: 'GPS 经度', value: img?.gpsLongitude != null ? String(img.gpsLongitude) : undefined },
-    { label: '发行日期', value: data.releaseDate },
-    { label: '添加时间', value: data.createdAt },
-    { label: '状态', value: data.status },
-  ];
-  return { overview, metadata };
-}
+function buildMetadata(data: MediaDetailItem): { overview: MetaField[]; metadata: MetaField[] } {
+  if (data.type === 'MOVIE') {
+    const meta = data.movieMetadata;
+    return {
+      overview: [
+        { label: '类型', value: joinValue(meta?.genres) },
+        { label: '片长', value: fmtDur((meta?.runtimeMinutes || 0) * 60), icon: <ClockCircleOutlined /> },
+        { label: '分级', value: meta?.certification },
+        { label: '评分', value: data.rating && data.rating > 0 ? `${data.rating.toFixed(1)} / 10` : undefined },
+      ],
+      metadata: [
+        { label: '原标题', value: data.originalTitle },
+        { label: '宣传语', value: meta?.tagline },
+        { label: '制片厂', value: joinValue(meta?.studios) },
+        { label: '发行日期', value: data.releaseDate },
+        { label: '添加时间', value: data.createdAt },
+        { label: '状态', value: data.status },
+      ],
+    };
+  }
 
-function buildAudioVM(data: any): { overview: MetaField[]; metadata: MetaField[] } {
-  const a = data.audioMetadata;
-  const overview: MetaField[] = [
-    { label: '艺术家', value: a?.artist, icon: <AudioOutlined /> },
-    { label: '专辑', value: a?.album },
-    { label: '时长', value: a?.durationSeconds > 0 ? fmtDur(a.durationSeconds) : undefined, icon: <ClockCircleOutlined /> },
-    { label: '类型', value: a?.genres },
-  ];
-  const metadata: MetaField[] = [
-    { label: '专辑艺术家', value: a?.albumArtist },
-    { label: '曲目号', value: a?.trackNumber != null ? String(a.trackNumber) : undefined },
-    { label: '碟号', value: a?.discNumber != null ? String(a.discNumber) : undefined },
-    { label: '比特率', value: a?.bitrate ? `${a.bitrate} kbps` : undefined },
-    { label: '采样率', value: a?.sampleRate ? `${a.sampleRate} Hz` : undefined },
-    { label: '声道', value: a?.channels != null ? String(a.channels) : undefined },
-    { label: '发行日期', value: data.releaseDate },
-    { label: '添加时间', value: data.createdAt },
-    { label: '状态', value: data.status },
-  ];
-  return { overview, metadata };
-}
+  if (data.type === 'TV_SHOW') {
+    const meta = data.tvShowMetadata;
+    return {
+      overview: [
+        { label: '类型', value: joinValue(meta?.genres) },
+        { label: '播出状态', value: meta?.status },
+        { label: '电视台', value: meta?.network },
+        { label: '评分', value: data.rating && data.rating > 0 ? `${data.rating.toFixed(1)} / 10` : undefined },
+      ],
+      metadata: [
+        { label: '原标题', value: data.originalTitle },
+        { label: '首播日期', value: data.releaseDate },
+        { label: '添加时间', value: data.createdAt },
+        { label: '识别状态', value: data.status },
+      ],
+    };
+  }
 
-function buildGenericVM(data: any): { overview: MetaField[]; metadata: MetaField[] } {
+  if (data.type === 'IMAGE') {
+    const meta = data.imageMetadata;
+    return {
+      overview: [
+        { label: '尺寸', value: meta?.width && meta?.height ? `${meta.width} x ${meta.height}` : undefined, icon: <PictureOutlined /> },
+        { label: '相机', value: meta?.cameraMake ? `${meta.cameraMake} ${meta.cameraModel || ''}`.trim() : undefined, icon: <CameraOutlined /> },
+        { label: '镜头', value: meta?.lens },
+        { label: '拍摄时间', value: meta?.takenAt, icon: <ClockCircleOutlined /> },
+      ],
+      metadata: [
+        { label: 'ISO', value: meta?.iso },
+        { label: '光圈', value: meta?.aperture },
+        { label: '快门速度', value: meta?.shutterSpeed },
+        { label: 'GPS 纬度', value: meta?.gpsLatitude },
+        { label: 'GPS 经度', value: meta?.gpsLongitude },
+        { label: '添加时间', value: data.createdAt },
+        { label: '状态', value: data.status },
+      ],
+    };
+  }
+
+  if (data.type === 'AUDIO') {
+    const meta = data.audioMetadata;
+    return {
+      overview: [
+        { label: '艺术家', value: meta?.artist, icon: <AudioOutlined /> },
+        { label: '专辑', value: meta?.album },
+        { label: '时长', value: fmtDur(meta?.durationSeconds), icon: <ClockCircleOutlined /> },
+        { label: '类型', value: joinValue(meta?.genres) },
+      ],
+      metadata: [
+        { label: '专辑艺术家', value: meta?.albumArtist },
+        { label: '曲目号', value: meta?.trackNumber },
+        { label: '碟号', value: meta?.discNumber },
+        { label: '比特率', value: meta?.bitrate ? `${meta.bitrate} kbps` : undefined },
+        { label: '采样率', value: meta?.sampleRate ? `${meta.sampleRate} Hz` : undefined },
+        { label: '声道', value: meta?.channels },
+        { label: '添加时间', value: data.createdAt },
+        { label: '状态', value: data.status },
+      ],
+    };
+  }
+
   return {
     overview: [],
     metadata: [
-      { label: '原始标题', value: data.originalTitle },
+      { label: '原标题', value: data.originalTitle },
       { label: '发行日期', value: data.releaseDate },
       { label: '添加时间', value: data.createdAt },
       { label: '状态', value: data.status },
@@ -123,39 +200,57 @@ function buildGenericVM(data: any): { overview: MetaField[]; metadata: MetaField
   };
 }
 
-// --- component ---
 const MediaDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const [data, setData] = useState<any>(null);
+  const access = useAccess();
+  const [data, setData] = useState<MediaDetailItem | null>(null);
+  const [playbackPosition, setPlaybackPosition] = useState(0);
   const [loading, setLoading] = useState(true);
   const [editVisible, setEditVisible] = useState(false);
-  const [editForm] = Form.useForm();
+  const [editForm] = Form.useForm<EditableMetadata>();
   const [isFavorited, setIsFavorited] = useState(false);
-  const [allTags, setAllTags] = useState<any[]>([]);
+  const [allTags, setAllTags] = useState<TagItem[]>([]);
   const [addingTag, setAddingTag] = useState(false);
-  const [addTagSelectValue, setAddTagSelectValue] = useState<number | undefined>(undefined);
+  const [addTagSelectValue, setAddTagSelectValue] = useState<number | undefined>();
   const [identifyVisible, setIdentifyVisible] = useState(false);
-  const [identifyForm] = Form.useForm();
-  const [tmdbCandidates, setTmdbCandidates] = useState<any[]>([]);
-  const [tmdbSearchLoading, setTmdbSearchLoading] = useState(false);
+  const [seasons, setSeasons] = useState<TvSeason[]>([]);
+  const [similarItems, setSimilarItems] = useState<MediaItem[]>([]);
+  const [similarHint, setSimilarHint] = useState<string | null>(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [seasonSyncing, setSeasonSyncing] = useState(false);
+
+  const numericId = Number(id);
 
   const fetchItem = async () => {
     setLoading(true);
     try {
-      const res = await getItemDetail(Number(id));
-      if (res.code === 200) setData(res.data);
+      const basic = await getItem(numericId);
+      setPlaybackPosition(basic.code === 200 && basic.data?.playbackPosition != null ? Number(basic.data.playbackPosition) || 0 : 0);
+
+      const res = await getItemDetail(numericId);
+      if (res.code === 200) {
+        const item = res.data as MediaDetailItem;
+        setData(item);
+        if (item?.type === 'TV_SHOW') {
+          const seasonsRes = await getItemSeasons(numericId);
+          if (seasonsRes.code === 200) setSeasons(seasonsRes.data || []);
+        } else {
+          setSeasons([]);
+        }
+      }
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (id) {
-      fetchItem();
-      checkFavorite(Number(id)).then((res) => {
-        if (res?.code === 200) setIsFavorited(res.data?.favorited || false);
-      }).catch(() => {});
-    }
+    if (!id) return;
+    fetchItem();
+    checkFavorite(numericId)
+      .then((res) => {
+        if (res?.code === 200) setIsFavorited(!!res.data?.favorite);
+      })
+      .catch(() => {});
   }, [id]);
 
   useEffect(() => {
@@ -164,141 +259,190 @@ const MediaDetail: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (!id) return;
+    setSimilarLoading(true);
+    setSimilarHint(null);
+    getSimilarItems(numericId, 12)
+      .then((res) => {
+        if (res.code !== 200) return;
+        const payload = res.data;
+        if (Array.isArray(payload)) {
+          setSimilarItems(payload);
+          return;
+        }
+        const scored = payload?.scoredItems || [];
+        setSimilarItems(scored.length > 0 ? scored.map((score) => score.item).filter(Boolean) : payload?.items || []);
+        if (payload?.hint) setSimilarHint(payload.hint);
+        else if (res.message && res.message !== 'success') setSimilarHint(res.message);
+      })
+      .catch(() => {})
+      .finally(() => setSimilarLoading(false));
+  }, [id]);
+
   const handleToggleFavorite = async () => {
-    const res = await toggleFavorite(Number(id));
+    const res = await toggleFavorite(numericId);
     if (res?.code === 200) {
-      setIsFavorited(res.data?.favorited || false);
-      message.success(res.data?.favorited ? '已收藏' : '已取消收藏');
+      const favorite = !!res.data?.favorite;
+      setIsFavorited(favorite);
+      message.success(favorite ? '已收藏' : '已取消收藏');
     }
   };
 
   const handleEditSave = async () => {
     const values = await editForm.validateFields();
-    const res = await updateMetadata(Number(id), values);
-    if (res.code === 200) { message.success('元数据更新成功'); setEditVisible(false); fetchItem(); }
-  };
-  const handleRefresh = async () => { await refreshMetadata(Number(id)); message.success('元数据刷新已触发'); setTimeout(fetchItem, 2000); };
-  const handleTmdbSearch = async (q: string) => {
-    if (!q?.trim()) {
-      setTmdbCandidates([]);
-      return;
-    }
-    setTmdbSearchLoading(true);
-    try {
-      const res = await searchTmdbCandidates(Number(id), q.trim());
-      if (res.code === 200) setTmdbCandidates(res.data || []);
-    } finally {
-      setTmdbSearchLoading(false);
-    }
-  };
-
-  const handleIdentify = async () => {
-    const values = await identifyForm.validateFields();
-    const res = await identifyItem(Number(id), { provider: 'tmdb', externalId: String(values.externalId) });
+    const res = await updateMetadata(numericId, values);
     if (res.code === 200) {
-      message.success('手动匹配成功');
-      setIdentifyVisible(false);
+      message.success('元数据更新成功');
+      setEditVisible(false);
       fetchItem();
     }
   };
+
+  const handleRefresh = async () => {
+    await refreshMetadata(numericId);
+    message.success('元数据刷新已触发');
+    setTimeout(fetchItem, 2000);
+  };
+
+  const handleClassify = async () => {
+    const res = await classifyItem(numericId);
+    if (res?.code === 200) {
+      message.success('分类规则已执行');
+      fetchItem();
+    }
+  };
+
   const handleDelete = async () => {
-    await deleteItem(Number(id));
+    await deleteItem(numericId);
     message.success('已移入回收站，可在回收站中恢复');
     history.push('/browse');
   };
-  const handleDeleteFile = async () => { await deleteSourceFile(Number(id)); message.success('源文件已删除'); fetchItem(); };
+
+  const handleDeleteFile = async () => {
+    await deleteSourceFile(numericId);
+    message.success('源文件已删除');
+    fetchItem();
+  };
 
   const handleAddTag = async (tagId: number) => {
     setAddingTag(true);
     try {
-      const res = await addTagToItem(Number(id), tagId);
+      const res = await addTagToItem(numericId, tagId);
       if (res?.code === 200) {
         message.success('已添加标签');
         setAddTagSelectValue(undefined);
         fetchItem();
-      } else message.error(res?.message || '添加失败');
+      } else {
+        message.error(res?.message || '添加失败');
+      }
     } finally {
       setAddingTag(false);
     }
   };
 
   const handleRemoveTag = async (tagId: number) => {
+    const res = await removeTagFromItem(numericId, tagId);
+    if (res?.code === 200) {
+      message.success('已移除标签');
+      fetchItem();
+    } else {
+      message.error(res?.message || '移除失败');
+    }
+  };
+
+  const handleSyncSeasons = async () => {
+    setSeasonSyncing(true);
     try {
-      const res = await removeTagFromItem(Number(id), tagId);
-      if (res?.code === 200) { message.success('已移除标签'); fetchItem(); }
-      else message.error(res?.message || '移除失败');
-    } catch (e) {
-      message.error('移除失败');
+      const res = await syncTvSeasons(numericId);
+      if (res?.code === 200) {
+        message.success(`已同步 ${res.data?.seasonCount ?? 0} 季`);
+        const seasonsRes = await getItemSeasons(numericId);
+        if (seasonsRes.code === 200) setSeasons(seasonsRes.data || []);
+      } else {
+        message.error(res?.message || '同步失败');
+      }
+    } catch {
+      message.error('同步季集失败');
+    } finally {
+      setSeasonSyncing(false);
     }
   };
 
   if (loading) return <div className="detail-loading"><Spin size="large" /></div>;
   if (!data) return <Result status="404" title="未找到媒体记录" />;
 
-  // --- poster / backdrop with stream fallback ---
-  const token = localStorage.getItem('accessToken') || '';
-  const tokenParam = `token=${encodeURIComponent(token)}`;
-  const posterUrl = data.posterPath
-    ? `/api/v1/items/${data.id}/poster?${tokenParam}`
-    : data.type === 'IMAGE' && data.fileIds?.length > 0
-      ? `/api/v1/stream/images/${data.fileIds[0]}?w=400&${tokenParam}`
-      : null;
-  const backdropUrl = data.backdropPath ? `/api/v1/items/${data.id}/backdrop?${tokenParam}` : posterUrl;
+  const posterUrl = resolveItemPosterUrl({
+    itemId: data.id,
+    posterPath: data.posterPath,
+    type: data.type,
+    fileIds: data.fileIds,
+    thumbnailWidth: 400,
+  });
+  const backdropUrl = resolveItemBackdropUrl({
+    itemId: data.id,
+    backdropPath: data.backdropPath,
+    posterPath: data.posterPath,
+    type: data.type,
+    fileIds: data.fileIds,
+    thumbnailWidth: 400,
+  });
   const year = data.releaseDate ? data.releaseDate.substring(0, 4) : null;
+  const vm = buildMetadata(data);
+  const overviewFields = vm.overview.filter((field) => field.value != null && field.value !== '');
+  const metadataFields = vm.metadata.filter((field) => field.value != null && field.value !== '');
 
-  // --- ViewModel ---
-  const vm =
-    data.type === 'MOVIE' || data.type === 'TV_SHOW' ? buildMovieVM(data)
-    : data.type === 'IMAGE' ? buildImageVM(data)
-    : data.type === 'AUDIO' ? buildAudioVM(data)
-    : buildGenericVM(data);
-
-  const overviewFields = vm.overview.filter(f => f.value);
-  const metadataFields = vm.metadata.filter(f => f.value);
-
-  // --- hero badges ---
   const renderBadges = () => {
     const badges: React.ReactNode[] = [];
-    if (data.rating > 0) badges.push(<span key="r" className="detail-badge badge-rating">★ {data.rating.toFixed(1)}</span>);
-    badges.push(<span key="t" className="detail-badge badge-type">{TYPE_LABELS[data.type] || data.type}</span>);
-    if (data.movieMetadata?.runtimeMinutes > 0)
-      badges.push(<span key="rt" className="detail-badge badge-runtime">{fmtDur(data.movieMetadata.runtimeMinutes * 60)}</span>);
-    if (data.movieMetadata?.certification)
-      badges.push(<span key="cert" className="detail-badge badge-runtime">{data.movieMetadata.certification}</span>);
-    if (data.imageMetadata?.width && data.imageMetadata?.height)
-      badges.push(<span key="dim" className="detail-badge badge-runtime">{data.imageMetadata.width}×{data.imageMetadata.height}</span>);
-    if (data.audioMetadata?.artist)
-      badges.push(<span key="artist" className="detail-badge badge-runtime">{data.audioMetadata.artist}</span>);
+    if (data.rating && data.rating > 0) badges.push(<span key="rating" className="detail-badge badge-rating">★ {data.rating.toFixed(1)}</span>);
+    badges.push(<span key="type" className="detail-badge badge-type">{TYPE_LABELS[data.type] || data.type}</span>);
+    if (data.movieMetadata?.runtimeMinutes) badges.push(<span key="runtime" className="detail-badge badge-runtime">{fmtDur(data.movieMetadata.runtimeMinutes * 60)}</span>);
+    if (data.movieMetadata?.certification) badges.push(<span key="cert" className="detail-badge badge-runtime">{data.movieMetadata.certification}</span>);
+    if (data.tvShowMetadata?.network) badges.push(<span key="network" className="detail-badge badge-runtime">{data.tvShowMetadata.network}</span>);
+    if (data.tvShowMetadata?.status) badges.push(<span key="tv-status" className="detail-badge badge-runtime">{data.tvShowMetadata.status}</span>);
+    if (data.imageMetadata?.width && data.imageMetadata?.height) badges.push(<span key="dim" className="detail-badge badge-runtime">{data.imageMetadata.width}x{data.imageMetadata.height}</span>);
+    if (data.audioMetadata?.artist) badges.push(<span key="artist" className="detail-badge badge-runtime">{data.audioMetadata.artist}</span>);
     badges.push(
-      <span key="s" className={`detail-badge badge-status ${data.status === 'IDENTIFIED' ? 'identified' : 'unidentified'}`}>
+      <span key="status" className={`detail-badge badge-status ${data.status === 'IDENTIFIED' ? 'identified' : 'unidentified'}`}>
         {data.status === 'IDENTIFIED' ? '已识别' : data.status === 'UNIDENTIFIED' ? '未识别' : data.status}
-      </span>
+      </span>,
     );
     return badges;
   };
 
-  // --- primary action by type ---
   const renderPrimaryAction = () => {
     if (data.type === 'IMAGE') {
       return (
-        <Button type="primary" size="large" icon={<EyeOutlined />}
-          onClick={() => { if (data.fileIds?.length > 0) window.open(getRawImageUrl(data.fileIds[0]), '_blank'); }}>
+        <Button
+          type="primary"
+          size="large"
+          icon={<EyeOutlined />}
+          onClick={() => {
+            if (data.fileIds?.length) window.open(getRawImageUrl(data.fileIds[0]), '_blank');
+          }}
+        >
           查看原图
         </Button>
       );
     }
-    if (['MOVIE', 'TV_SHOW', 'AUDIO'].includes(data.type)) {
+    if (['MOVIE', 'TV_SHOW', 'AUDIO'].includes(data.type) && access.canPlayMedia) {
       return (
-        <Button type="primary" size="large" icon={<PlayCircleFilled />}
-          onClick={() => history.push(`/player/${data.id}`)}>
-          播放
+        <Button
+          type="primary"
+          size="large"
+          icon={<PlayCircleFilled />}
+          onClick={() => {
+            const t = playbackPosition && playbackPosition > 30 ? playbackPosition : 0;
+            history.push(`/player/${data.id}${t > 0 ? `?t=${t}` : ''}`);
+          }}
+        >
+          {playbackPosition && playbackPosition > 30 ? '继续观看' : '播放'}
         </Button>
       );
     }
     return null;
   };
 
-  // --- Tab: overview ---
   const renderOverviewTab = () => (
     <div className="detail-overview-tab">
       {data.overview && (
@@ -309,103 +453,120 @@ const MediaDetail: React.FC = () => {
       )}
       {overviewFields.length > 0 && (
         <div className="detail-overview-grid">
-          {overviewFields.map(f => (
-            <div key={f.label} className="detail-overview-card">
-              {f.icon && <span className="overview-card-icon">{f.icon}</span>}
+          {overviewFields.map((field) => (
+            <div key={field.label} className="detail-overview-card">
+              {field.icon && <span className="overview-card-icon">{field.icon}</span>}
               <div>
-                <div className="overview-card-label">{f.label}</div>
-                <div className="overview-card-value">{f.value}</div>
+                <div className="overview-card-label">{field.label}</div>
+                <div className="overview-card-value">{field.value}</div>
               </div>
             </div>
           ))}
         </div>
       )}
       <div className="detail-tags-section">
-        <h3 className="detail-section-title">标签 & 分类</h3>
+        <h3 className="detail-section-title">标签与分类</h3>
         <div className="detail-tags">
-          {data.tags?.map((t: any) => (
+          {data.tags?.map((tag) => (
             <Tag
-              key={t.id}
-              color={t.color || 'blue'}
-              closable
-              onClose={() => handleRemoveTag(t.id)}
+              key={tag.id}
+              color={tag.color || 'blue'}
+              closable={access.canAssignTags}
+              onClose={access.canAssignTags ? () => handleRemoveTag(tag.id) : undefined}
             >
-              {t.name}
+              {tag.name}
             </Tag>
           ))}
-          {data.categories?.map((c: any) => <Tag key={`cat-${c.id}`}>{c.name}</Tag>)}
+          {data.categories?.map((category: CategoryItem) => <Tag key={`cat-${category.id}`}>{category.name}</Tag>)}
         </div>
-        <div style={{ marginTop: 8 }}>
-          <Select
-            placeholder="添加标签"
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            style={{ width: 200 }}
-            loading={addingTag}
-            value={addTagSelectValue}
-            onChange={(tagId: number) => {
-              if (tagId != null) handleAddTag(tagId);
-              else setAddTagSelectValue(undefined);
-            }}
-            options={allTags
-              .filter((t) => !data.tags?.some((ct: any) => ct.id === t.id))
-              .map((t) => ({ label: t.name, value: t.id }))}
+        {access.canAssignTags && (
+          <div style={{ marginTop: 8 }}>
+            <TagSelect
+              allTags={allTags}
+              assignedTagIds={(data.tags || []).map((tag) => tag.id)}
+              loading={addingTag}
+              value={addTagSelectValue}
+              onChange={setAddTagSelectValue}
+              onSelect={handleAddTag}
+            />
+          </div>
+        )}
+      </div>
+      {(similarItems.length > 0 || similarHint) && (
+        <div style={{ marginTop: 24 }}>
+          <HorizontalMediaRow title="相似推荐" items={similarItems} loading={similarLoading} />
+          {similarHint && similarItems.length === 0 && (
+            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+              {similarHint}
+            </Typography.Text>
+          )}
+        </div>
+      )}
+      {data.type === 'TV_SHOW' && (
+        <div style={{ marginTop: 16 }}>
+          <h3 className="detail-section-title">季与集</h3>
+          <TvSeasonPanel
+            mediaItemId={data.id}
+            seasons={seasons}
+            canSync={access.canRefreshMetadata}
+            syncing={seasonSyncing}
+            onSync={handleSyncSeasons}
           />
         </div>
-      </div>
+      )}
     </div>
   );
 
-  // --- Tab: metadata ---
   const renderMetadataTab = () => (
     <div className="detail-metadata-grid">
-      {metadataFields.map(f => (
-        <div key={f.label} className="detail-meta-item">
-          <span className="detail-meta-label">{f.label}</span>
-          <span className="detail-meta-value">{f.value}</span>
+      {metadataFields.map((field) => (
+        <div key={field.label} className="detail-meta-item">
+          <span className="detail-meta-label">{field.label}</span>
+          <span className="detail-meta-value">{field.value}</span>
         </div>
       ))}
       {metadataFields.length === 0 && <div style={{ color: 'var(--color-text-tertiary)' }}>暂无更多元数据</div>}
     </div>
   );
 
-  // --- Tab: files ---
   const renderFilesTab = () => {
-    if (!data.files || data.files.length === 0)
+    if (!data.files || data.files.length === 0) {
       return <div style={{ color: 'var(--color-text-tertiary)', padding: '16px 0' }}>暂无文件信息</div>;
+    }
 
     return (
       <div className="detail-files-list">
-        {data.files.map((f: any) => (
-          <div key={f.id} className="detail-file-card">
+        {data.files.map((file: MediaFile) => (
+          <div key={file.id} className="detail-file-card">
             <div className="file-header">
               <HddOutlined className="file-icon" />
-              <span className="file-name">{f.fileName}</span>
+              <span className="file-name">{file.fileName}</span>
             </div>
-            {f.filePath && (
+            {file.filePath && (
               <div className="file-path-row">
                 <span className="spec-label">完整路径</span>
-                <Typography.Text copyable={{ text: f.filePath }} ellipsis={{ tooltip: f.filePath }} style={{ display: 'block', marginTop: 4 }}>
-                  {f.filePath}
+                <Typography.Text copyable={{ text: file.filePath }} ellipsis={{ tooltip: file.filePath }} style={{ display: 'block', marginTop: 4 }}>
+                  {file.filePath}
                 </Typography.Text>
               </div>
             )}
             <div className="file-specs">
-              {f.fileSize > 0 && <div className="file-spec-item"><span className="spec-label">大小</span><span className="spec-value">{fmtSize(f.fileSize)}</span></div>}
-              {f.mimeType && <div className="file-spec-item"><span className="spec-label">格式</span><span className="spec-value">{f.mimeType}</span></div>}
-              {f.videoCodec && <div className="file-spec-item"><span className="spec-label">视频编码</span><span className="spec-value">{f.videoCodec}</span></div>}
-              {f.audioCodec && <div className="file-spec-item"><span className="spec-label">音频编码</span><span className="spec-value">{f.audioCodec}</span></div>}
-              {f.width > 0 && f.height > 0 && <div className="file-spec-item"><span className="spec-label">分辨率</span><span className="spec-value">{f.width}×{f.height}</span></div>}
-              {f.durationSeconds > 0 && <div className="file-spec-item"><span className="spec-label">时长</span><span className="spec-value">{fmtDur(f.durationSeconds)}</span></div>}
-              {f.bitrate > 0 && <div className="file-spec-item"><span className="spec-label">码率</span><span className="spec-value">{(f.bitrate / 1000).toFixed(0)} kbps</span></div>}
+              <div className="file-spec-item"><span className="spec-label">大小</span><span className="spec-value">{fmtSize(file.fileSize)}</span></div>
+              {file.mimeType && <div className="file-spec-item"><span className="spec-label">格式</span><span className="spec-value">{file.mimeType}</span></div>}
+              {file.videoCodec && <div className="file-spec-item"><span className="spec-label">视频编码</span><span className="spec-value">{file.videoCodec}</span></div>}
+              {file.audioCodec && <div className="file-spec-item"><span className="spec-label">音频编码</span><span className="spec-value">{file.audioCodec}</span></div>}
+              {file.width && file.height && <div className="file-spec-item"><span className="spec-label">分辨率</span><span className="spec-value">{file.width}x{file.height}</span></div>}
+              {file.durationSeconds && <div className="file-spec-item"><span className="spec-label">时长</span><span className="spec-value">{fmtDur(file.durationSeconds)}</span></div>}
+              {file.bitrate && <div className="file-spec-item"><span className="spec-label">码率</span><span className="spec-value">{(file.bitrate / 1000).toFixed(0)} kbps</span></div>}
             </div>
           </div>
         ))}
         <div className="detail-file-actions">
-          <Popconfirm title="此操作将删除源文件，不可恢复！确定继续？" onConfirm={handleDeleteFile}>
-            <Button danger size="small" icon={<DeleteOutlined />}>删除源文件</Button>
-          </Popconfirm>
+          {access.canDeleteSourceFile && (
+            <Popconfirm title="此操作将删除源文件，不可恢复。确定继续？" onConfirm={handleDeleteFile}>
+              <Button danger size="small" icon={<DeleteOutlined />}>删除源文件</Button>
+            </Popconfirm>
+          )}
         </div>
       </div>
     );
@@ -413,24 +574,16 @@ const MediaDetail: React.FC = () => {
 
   return (
     <div className="detail-page">
-      {/* Back link */}
       <button className="detail-back" onClick={() => history.push('/browse')}>
         <ArrowLeftOutlined /> 返回
       </button>
 
-      {/* Hero */}
       <div className="detail-hero">
         {backdropUrl && <div className="detail-hero-bg" style={{ backgroundImage: `url(${backdropUrl})` }} />}
         <div className="detail-hero-gradient" />
         <div className="detail-hero-content">
           <div className="detail-poster">
-            {posterUrl ? (
-              <img src={posterUrl} alt={data.title} />
-            ) : (
-              <div className="detail-poster-placeholder">
-                {TYPE_ICONS[data.type] || <FileOutlined />}
-              </div>
-            )}
+            {posterUrl ? <img src={posterUrl} alt={data.title} /> : <div className="detail-poster-placeholder">{TYPE_ICONS[data.type] || <FileOutlined />}</div>}
           </div>
           <div className="detail-hero-info">
             <h1 className="detail-title">
@@ -441,28 +594,40 @@ const MediaDetail: React.FC = () => {
             {data.overview && <div className="detail-overview-brief">{data.overview}</div>}
             <div className="detail-actions">
               {renderPrimaryAction()}
-              <Button
-                icon={isFavorited ? <HeartFilled /> : <HeartOutlined />}
-                onClick={handleToggleFavorite}
-                danger={isFavorited}
-              >
+              <Button icon={isFavorited ? <HeartFilled /> : <HeartOutlined />} onClick={handleToggleFavorite} danger={isFavorited}>
                 {isFavorited ? '已收藏' : '收藏'}
               </Button>
-              <Button icon={<EditOutlined />} onClick={() => {
-                editForm.setFieldsValue({ title: data.title, originalTitle: data.originalTitle, overview: data.overview, rating: data.rating });
-                setEditVisible(true);
-              }}>编辑</Button>
-              <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新元数据</Button>
-              <Button onClick={() => setIdentifyVisible(true)}>TMDb 匹配</Button>
-              <Popconfirm title="确定删除此媒体项？" onConfirm={handleDelete}>
-                <Button danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
+              {access.canEditMetadata && (
+                <Button
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    editForm.setFieldsValue({
+                      title: data.title,
+                      originalTitle: data.originalTitle,
+                      overview: data.overview,
+                      rating: data.rating,
+                      network: data.tvShowMetadata?.network,
+                      tvStatus: data.tvShowMetadata?.status,
+                    });
+                    setEditVisible(true);
+                  }}
+                >
+                  编辑
+                </Button>
+              )}
+              {access.canRefreshMetadata && <Button icon={<ReloadOutlined />} onClick={handleRefresh}>刷新元数据</Button>}
+              {access.canEditMetadata && <Button onClick={handleClassify}>自动分类</Button>}
+              {access.canEditMetadata && <Button onClick={() => setIdentifyVisible(true)}>手动匹配</Button>}
+              {access.canDeleteMedia && (
+                <Popconfirm title="确定删除此媒体项？" onConfirm={handleDelete}>
+                  <Button danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Body */}
       <div className="detail-body">
         <Tabs
           defaultActiveKey="overview"
@@ -474,47 +639,22 @@ const MediaDetail: React.FC = () => {
         />
       </div>
 
-      <Modal
-        title="TMDb 手动匹配"
-        open={identifyVisible}
-        onCancel={() => { setIdentifyVisible(false); setTmdbCandidates([]); }}
-        onOk={handleIdentify}
-        width={560}
-      >
-        <Form form={identifyForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="搜索影片">
-            <Input.Search
-              placeholder="输入片名搜索"
-              loading={tmdbSearchLoading}
-              onSearch={handleTmdbSearch}
-              enterButton="搜索"
-            />
-          </Form.Item>
-          {tmdbCandidates.length > 0 && (
-            <Form.Item label="选择匹配结果">
-              <Select
-                placeholder="从搜索结果选择"
-                options={tmdbCandidates.map((c) => ({
-                  value: String(c.id),
-                  label: `${c.title}${c.releaseDate ? ` (${c.releaseDate})` : ''}`,
-                }))}
-                onChange={(v) => identifyForm.setFieldValue('externalId', v)}
-              />
-            </Form.Item>
-          )}
-          <Form.Item name="externalId" label="TMDb ID" rules={[{ required: true, message: '请选择或输入 TMDb ID' }]}>
-            <Input placeholder="例如 27205" />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {access.canEditMetadata && (
+        <IdentifyModal itemId={numericId} open={identifyVisible} onClose={() => setIdentifyVisible(false)} onSuccess={fetchItem} />
+      )}
 
-      {/* Edit modal */}
       <Modal title="编辑元数据" open={editVisible} onCancel={() => setEditVisible(false)} onOk={handleEditSave} width={560}>
         <Form form={editForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="title" label="标题" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="originalTitle" label="原始标题"><Input /></Form.Item>
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}><Input /></Form.Item>
+          <Form.Item name="originalTitle" label="原标题"><Input /></Form.Item>
           <Form.Item name="overview" label="简介"><Input.TextArea rows={4} /></Form.Item>
           <Form.Item name="rating" label="评分"><InputNumber min={0} max={10} step={0.1} style={{ width: 120 }} /></Form.Item>
+          {data.type === 'TV_SHOW' && (
+            <>
+              <Form.Item name="network" label="电视台"><Input /></Form.Item>
+              <Form.Item name="tvStatus" label="播出状态"><Input placeholder="Continuing / Ended" /></Form.Item>
+            </>
+          )}
         </Form>
       </Modal>
     </div>

@@ -7,6 +7,8 @@ import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -19,7 +21,7 @@ public class MediaItemSpecification {
             String keyword,
             Set<Integer> categoryIds,
             Set<Integer> tagIds) {
-        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, true);
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, true);
     }
 
     public static Specification<MediaItem> filterBy(
@@ -28,6 +30,31 @@ public class MediaItemSpecification {
             String keyword,
             Set<Integer> categoryIds,
             Set<Integer> tagIds,
+            Integer minYear,
+            Integer maxYear,
+            Double minRating) {
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, true);
+    }
+
+    public static Specification<MediaItem> filterBy(
+            Set<Integer> libraryIds,
+            String type,
+            String keyword,
+            Set<Integer> categoryIds,
+            Set<Integer> tagIds,
+            boolean visibleOnly) {
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, visibleOnly);
+    }
+
+    public static Specification<MediaItem> filterBy(
+            Set<Integer> libraryIds,
+            String type,
+            String keyword,
+            Set<Integer> categoryIds,
+            Set<Integer> tagIds,
+            Integer minYear,
+            Integer maxYear,
+            Double minRating,
             boolean visibleOnly) {
 
         return (root, query, criteriaBuilder) -> {
@@ -66,6 +93,19 @@ public class MediaItemSpecification {
             if (tagIds != null && !tagIds.isEmpty()) {
                 Join<MediaItem, Tag> tagJoin = root.join("tags");
                 predicates.add(tagJoin.get("id").in(tagIds));
+            }
+
+            if (minYear != null) {
+                predicates.add(criteriaBuilder.greaterThanOrEqualTo(
+                        root.get("releaseDate"), LocalDate.of(minYear, 1, 1)));
+            }
+            if (maxYear != null) {
+                predicates.add(criteriaBuilder.lessThanOrEqualTo(
+                        root.get("releaseDate"), LocalDate.of(maxYear, 12, 31)));
+            }
+            if (minRating != null) {
+                predicates.add(criteriaBuilder.greaterThanOrEqualTo(
+                        root.get("rating"), BigDecimal.valueOf(minRating)));
             }
 
             // Distict results because of joins

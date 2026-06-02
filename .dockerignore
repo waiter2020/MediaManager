@@ -5,7 +5,13 @@
 **/.umi
 **/.idea
 **/.vscode
+.git/
 data/
 media/
+docs/
+scripts/
 *.db
 *.log
+*.md
+tmp-token.txt
+docker-build.log

@@ -25,7 +25,11 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         if (requestedResource.exists() && requestedResource.isReadable()) {
                             return requestedResource;
                         }
-                        return new ClassPathResource("/static/index.html");
+                        Resource fallback = new ClassPathResource("/static/index.html");
+                        if (fallback.exists() && fallback.isReadable()) {
+                            return fallback;
+                        }
+                        return null;
                     }
                 });
     }

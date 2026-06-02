@@ -4,6 +4,7 @@ import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.library.dto.MediaLibraryCreateRequest;
 import com.mediamanager.library.dto.MediaLibraryResponse;
 import com.mediamanager.library.dto.MediaLibraryUpdateRequest;
+import com.mediamanager.classification.service.LibraryClassifyJobService;
 import com.mediamanager.library.service.MediaLibraryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -22,6 +23,7 @@ import java.util.Map;
 public class MediaLibraryController {
 
     private final MediaLibraryService libraryService;
+    private final LibraryClassifyJobService libraryClassifyJobService;
 
     @PostMapping
     @PreAuthorize("hasAuthority('library:create')")
@@ -73,5 +75,29 @@ public class MediaLibraryController {
     @Operation(summary = "Get library statistics")
     public ApiResponse<Map<String, Object>> getLibraryStats(@PathVariable Integer id) {
         return ApiResponse.success(libraryService.getLibraryStats(id));
+    }
+
+    @PostMapping("/{id}/classify")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Re-run classification for all visible items in library (async)")
+    public ApiResponse<Map<String, Object>> classifyLibrary(@PathVariable Integer id) {
+        boolean started = libraryClassifyJobService.startLibraryClassify(id);
+        if (!started) {
+            return ApiResponse.success(Map.of(
+                    "accepted", false,
+                    "message", "库级分类任务正在进行中",
+                    "status", libraryClassifyJobService.getStatus()));
+        }
+        return ApiResponse.success(Map.of(
+                "accepted", true,
+                "message", "库级分类任务已启动",
+                "status", libraryClassifyJobService.getStatus()));
+    }
+
+    @GetMapping("/classify/status")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Library-wide classification job status")
+    public ApiResponse<Map<String, Object>> classifyLibraryStatus() {
+        return ApiResponse.success(libraryClassifyJobService.getStatus());
     }
 }

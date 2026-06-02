@@ -42,4 +42,22 @@ public class AiSuggestionController {
         aiSuggestionService.reject(id, reviewerId);
         return ApiResponse.success();
     }
+
+    @PostMapping("/batch-approve")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    public ApiResponse<Map<String, Integer>> batchApprove(@RequestBody Map<String, List<Integer>> body) {
+        Integer reviewerId = securityCurrentUser.getCurrentUser().map(SysUser::getId).orElse(null);
+        List<Integer> ids = body != null ? body.get("ids") : List.of();
+        int count = aiSuggestionService.batchApprove(ids, reviewerId);
+        return ApiResponse.success(Map.of("approved", count));
+    }
+
+    @PostMapping("/batch-reject")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    public ApiResponse<Map<String, Integer>> batchReject(@RequestBody Map<String, List<Integer>> body) {
+        Integer reviewerId = securityCurrentUser.getCurrentUser().map(SysUser::getId).orElse(null);
+        List<Integer> ids = body != null ? body.get("ids") : List.of();
+        int count = aiSuggestionService.batchReject(ids, reviewerId);
+        return ApiResponse.success(Map.of("rejected", count));
+    }
 }

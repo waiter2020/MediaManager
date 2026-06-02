@@ -1,12 +1,13 @@
 package com.mediamanager.plugin;
 
+import com.mediamanager.ai.spi.AiProvider;
 import com.mediamanager.classification.spi.ClassifierStrategy;
 import com.mediamanager.metadata.spi.MetadataExtractor;
+import com.mediamanager.metadata.spi.MetadataScraper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,18 +20,42 @@ public class PluginRegistry {
 
     private final Map<String, RegisteredPlugin> byKey;
 
-    public PluginRegistry(List<MetadataExtractor> extractors, List<ClassifierStrategy> classifiers) {
+    public PluginRegistry(
+            List<MetadataExtractor> extractors,
+            List<MetadataScraper> scrapers,
+            List<ClassifierStrategy> classifiers,
+            List<AiProvider> aiProviders) {
         List<RegisteredPlugin> all = new ArrayList<>();
         for (MetadataExtractor extractor : extractors) {
             all.add(new RegisteredPlugin(
-                    extractor.getType().toLowerCase(),
-                    PluginKind.EXTRACTOR,
-                    extractor.getType(),
+                    extractor.id(),
+                    extractor.kind(),
+                    extractor.displayName(),
                     extractor));
         }
+        for (MetadataScraper scraper : scrapers) {
+            all.add(new RegisteredPlugin(
+                    scraper.id(),
+                    scraper.kind(),
+                    scraper.displayName(),
+                    scraper));
+        }
         for (ClassifierStrategy classifier : classifiers) {
-            String id = classifier.getClass().getSimpleName().replace("Classifier", "").toLowerCase();
-            all.add(new RegisteredPlugin(id, PluginKind.CLASSIFIER, classifier.getClass().getSimpleName(), classifier));
+            all.add(new RegisteredPlugin(
+                    classifier.id(),
+                    classifier.kind(),
+                    classifier.displayName(),
+                    classifier));
+        }
+        for (AiProvider provider : aiProviders) {
+            if ("noop".equals(provider.providerId())) {
+                continue;
+            }
+            all.add(new RegisteredPlugin(
+                    provider.id(),
+                    provider.kind(),
+                    provider.displayName(),
+                    provider));
         }
         this.byKey = all.stream().collect(Collectors.toMap(
                 p -> p.kind().name() + ":" + p.id(),

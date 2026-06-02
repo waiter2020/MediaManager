@@ -54,11 +54,13 @@ volumes:
 | 层级 | 国内默认 | 配置 |
 |------|----------|------|
 | Docker 基础镜像 | `docker.m.daocloud.io/library/...` | `Dockerfile` / `docker-compose.yml` / `.env.example` |
-| Alpine apk | `mirrors.aliyun.com` | `MIRROR_PROFILE=cn` |
+| Alpine apk | `mirrors.tuna.tsinghua.edu.cn`（main+community） | `MIRROR_PROFILE=cn`，`ALPINE_MIRROR_HOST` |
 | Debian/Ubuntu apt（Maven 阶段） | `mirrors.aliyun.com` | `MIRROR_PROFILE=cn` |
-| npm | `registry.npmmirror.com` + 二进制镜像 | `media-manager-web/.npmrc` |
+| npm 包元数据 | `registry.npmjs.org`（可 `.env` 改 `NPM_REGISTRY`） | `Dockerfile` `NPM_CONFIG_REGISTRY` |
+| npm 二进制 | `npmmirror.com/mirrors/*` | `media-manager-web/.npmrc` |
 | Maven | 阿里云 central / spring / public | 根目录 `settings.xml` |
-| BuildKit 层缓存 | npm / `.m2` 挂载缓存 | `Dockerfile` `RUN --mount=type=cache` |
+| BuildKit 层缓存 | `node_modules` + `/root/.npm` + Maven `.m2` | `Dockerfile` `RUN --mount=type=cache` |
+| npm 二进制 | `esbuild_binary_host` 等 | `media-manager-web/.npmrc` |
 
 ### 一键配置
 
@@ -80,6 +82,7 @@ docker compose build
 | `MAVEN_IMAGE` | `docker.m.daocloud.io/library/maven:3.9-eclipse-temurin-21` | 同上 |
 | `JRE_IMAGE` | `docker.m.daocloud.io/library/eclipse-temurin:21-jre-alpine` | 同上 |
 | `MAVEN_SETTINGS_FILE` | `settings.xml` | 海外改为 `settings-default.xml` |
+| `ALPINE_MIRROR_HOST` | `mirrors.tuna.tsinghua.edu.cn` | apk 慢时可换 `mirrors.ustc.edu.cn` 等 |
 
 海外示例（写入 `.env` 或临时 export）：
 
@@ -136,12 +139,16 @@ ollama pull nomic-embed-text
 ollama pull qwen2.5:7b
 ```
 
-容器访问宿主机（Docker Desktop）：
+容器访问宿主机（`docker-compose.yml` 已默认 `http://host.docker.internal:11434`）：
 
 ```yaml
 environment:
   MEDIAMANAGER_AI_OLLAMA_BASE_URL: http://host.docker.internal:11434
+extra_hosts:
+  - "host.docker.internal:host-gateway"
 ```
+
+**注意**：在 **设置 → AI** 中若仍保存 `http://localhost:11434`，在容器内会指向容器自身而非宿主机，嵌入请求会 `Connection refused`。请改为 `http://host.docker.internal:11434`，或留空以使用环境变量（V19 迁移会清空数据库中的 localhost 种子值）。FFmpeg 路径在 **设置 → 媒体处理** 中配置。
 
 库级配置见 `docs/v2/04-ai-platform.md`。
 

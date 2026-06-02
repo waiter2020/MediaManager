@@ -1,10 +1,12 @@
 package com.mediamanager.system.service;
 
+import com.mediamanager.common.util.PasswordValidator;
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
 import com.mediamanager.common.security.JwtTokenProvider;
 import com.mediamanager.system.dto.LoginRequest;
 import com.mediamanager.system.dto.LoginResponse;
+import com.mediamanager.system.dto.SetupStatusResponse;
 import com.mediamanager.system.entity.SysRefreshToken;
 import com.mediamanager.system.entity.SysRole;
 import com.mediamanager.system.entity.SysUser;
@@ -50,10 +52,7 @@ public class AuthService {
                 .map(SysRole::getCode)
                 .collect(Collectors.toSet());
 
-        Set<String> permissions = user.getRoles().stream()
-                .flatMap(role -> role.getPermissions().stream())
-                .map(p -> p.getCode())
-                .collect(Collectors.toSet());
+        Set<String> permissions = UserService.collectPermissions(user);
 
         String accessToken = tokenProvider.generateAccessToken(user.getId(), user.getUsername(), permissions);
         String refreshTokenString = tokenProvider.generateRefreshTokenValue();
@@ -107,10 +106,7 @@ public class AuthService {
                 .map(SysRole::getCode)
                 .collect(Collectors.toSet());
 
-        Set<String> permissions = user.getRoles().stream()
-                .flatMap(role -> role.getPermissions().stream())
-                .map(p -> p.getCode())
-                .collect(Collectors.toSet());
+        Set<String> permissions = UserService.collectPermissions(user);
 
         String accessToken = tokenProvider.generateAccessToken(user.getId(), user.getUsername(), permissions);
 
@@ -147,5 +143,12 @@ public class AuthService {
         superAdmin.getRoles().add(superAdminRole);
 
         userRepository.save(superAdmin);
+    }
+
+    @Transactional(readOnly = true)
+    public SetupStatusResponse getSetupStatus() {
+        return SetupStatusResponse.builder()
+                .setupCompleted(userRepository.count() > 0)
+                .build();
     }
 }

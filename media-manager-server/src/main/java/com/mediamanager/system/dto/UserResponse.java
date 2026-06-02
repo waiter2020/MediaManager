@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 @Data
 @Builder
@@ -22,6 +23,7 @@ public class UserResponse {
     private Instant createdAt;
     private Instant updatedAt;
     private List<RoleInfo> roles;
+    private Set<String> permissions;
 
     @Data
     @Builder

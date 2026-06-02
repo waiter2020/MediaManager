@@ -12,12 +12,24 @@ public class FileNameParser {
     /**
      * Parses convention movie names: Inception (2010).mp4
      */
-    private static final Pattern TITLE_YEAR_PATTERN = Pattern.compile("^(.*?)[\\s\\(]+(19\\d{2}|20\\d{2})[\\p{Punct}\\s]*");
+    private static final Pattern TITLE_YEAR_PATTERN = Pattern.compile("^(.*?)[\\s\\(\\[]+(19\\d{2}|20\\d{2})[\\]\\)\\p{Punct}\\s]*");
     
     /**
      * Parses TV episodes: Breaking Bad S01E03.mkv
      */
     private static final Pattern TV_EPISODE_PATTERN = Pattern.compile("^(.*?)[\\s\\.]+[sS](\\d{1,2})[eE](\\d{1,2})");
+
+    private static final Pattern TV_EPISODE_ALT_PATTERN = Pattern.compile("^(.*?)[\\s\\.]+(\\d{1,2})[xX](\\d{1,2})");
+
+    private static final Pattern TV_EPISODE_ZH_PATTERN = Pattern.compile("^(.*?)[\\s\\.]*第(\\d{1,2})季[\\s\\.]*第(\\d{1,2})集");
+
+    private static final Pattern TV_EPISODE_ENG_PATTERN = Pattern.compile("^(.*?)[\\s\\.]*[sS]eason[\\s\\.]*(\\d{1,2})[\\s\\.]*[eE]pisode[\\s\\.]*(\\d{1,2})");
+
+    private static final Pattern TV_EPISODE_DASH_PATTERN = Pattern.compile("^(.*?)[\\s\\.]+-\\s*(\\d{1,3})(?:\\s|\\.|-|$)");
+
+    private static final Pattern DATE_TITLE_PATTERN = Pattern.compile("^(\\d{4})[-_.](\\d{2})[-_.](\\d{2})[\\s._-]+(.+)$");
+
+    private static final Pattern AUDIO_TRACK_PATTERN = Pattern.compile("^(?:(\\d{1,2})[-_.\\s]+)?(.+?)(?:\\s+-\\s+(.+))?$");
 
     /**
      * Matches Japanese AV codes like: ABP-123, SSIS-456, MIDV-001, FC2-PPV-1234567
@@ -30,10 +42,14 @@ public class FileNameParser {
 
     public MetadataResult parse(String fileName) {
         MetadataResult result = MetadataResult.builder().build();
+        if (fileName == null || fileName.isBlank()) {
+            return result;
+        }
 
         // Remove extension
         int dotIdx = fileName.lastIndexOf('.');
         String baseName = dotIdx > 0 ? fileName.substring(0, dotIdx) : fileName;
+        baseName = stripReleaseNoise(baseName);
 
         // Try JAV Code extraction (always attempt, populate providerIds)
         String javCode = extractJavCode(baseName);
@@ -43,11 +59,33 @@ public class FileNameParser {
 
         // Try TV Episode
         Matcher tvMatcher = TV_EPISODE_PATTERN.matcher(baseName);
-        if (tvMatcher.find()) {
+        boolean tvMatched = tvMatcher.find();
+        if (!tvMatched) {
+            tvMatcher = TV_EPISODE_ALT_PATTERN.matcher(baseName);
+            tvMatched = tvMatcher.find();
+        }
+        if (!tvMatched) {
+            tvMatcher = TV_EPISODE_ZH_PATTERN.matcher(baseName);
+            tvMatched = tvMatcher.find();
+        }
+        if (!tvMatched) {
+            tvMatcher = TV_EPISODE_ENG_PATTERN.matcher(baseName);
+            tvMatched = tvMatcher.find();
+        }
+        if (tvMatched) {
             result.setOriginalTitle(cleanTitle(tvMatcher.group(1)));
             result.setTitle(result.getOriginalTitle());
             result.setSeasonNumber(Integer.parseInt(tvMatcher.group(2)));
             result.setEpisodeNumber(Integer.parseInt(tvMatcher.group(3)));
+            return result;
+        }
+
+        Matcher dashEpisodeMatcher = TV_EPISODE_DASH_PATTERN.matcher(baseName);
+        if (dashEpisodeMatcher.find()) {
+            result.setOriginalTitle(cleanTitle(dashEpisodeMatcher.group(1)));
+            result.setTitle(result.getOriginalTitle());
+            result.setSeasonNumber(1);
+            result.setEpisodeNumber(Integer.parseInt(dashEpisodeMatcher.group(2)));
             return result;
         }
 
@@ -62,6 +100,19 @@ public class FileNameParser {
             return result;
         }
 
+        Matcher dateMatcher = DATE_TITLE_PATTERN.matcher(baseName);
+        if (dateMatcher.find()) {
+            result.setTitle(cleanTitle(dateMatcher.group(4)));
+            result.setOriginalTitle(result.getTitle());
+            try {
+                result.setReleaseDate(java.time.LocalDate.of(
+                        Integer.parseInt(dateMatcher.group(1)),
+                        Integer.parseInt(dateMatcher.group(2)),
+                        Integer.parseInt(dateMatcher.group(3))));
+            } catch (Exception ignored) {}
+            return result;
+        }
+
         // If we found a JAV code, use it as the title
         if (javCode != null) {
             result.setTitle(javCode);
@@ -72,6 +123,16 @@ public class FileNameParser {
         // Fallback: Just use cleaned filename as title
         result.setTitle(cleanTitle(baseName));
         result.setOriginalTitle(result.getTitle());
+
+        Matcher audioMatcher = AUDIO_TRACK_PATTERN.matcher(result.getTitle());
+        if (audioMatcher.matches() && audioMatcher.group(1) != null) {
+            result.setTrackNumber(Integer.parseInt(audioMatcher.group(1)));
+            result.setTitle(cleanTitle(audioMatcher.group(2)));
+        }
+        if (audioMatcher.matches() && audioMatcher.group(3) != null) {
+            result.setArtist(cleanTitle(audioMatcher.group(2)));
+            result.setTitle(cleanTitle(audioMatcher.group(3)));
+        }
         return result;
     }
 
@@ -108,8 +169,20 @@ public class FileNameParser {
     }
 
     private String cleanTitle(String raw) {
+        if (raw == null) {
+            return null;
+        }
         return raw.replace('.', ' ')
                   .replace('_', ' ')
+                  .replaceAll("\\s+", " ")
                   .trim();
+    }
+
+    private String stripReleaseNoise(String raw) {
+        return raw
+                .replaceAll("(?i)\\b(2160p|1080p|720p|480p|BluRay|WEB[-_. ]?DL|WEBRip|HDRip|DVDRip|x264|x265|HEVC|H\\.264|H\\.265|AAC|DTS|DDP?5\\.1)\\b", " ")
+                .replaceAll("\\[[^\\]]*]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 }

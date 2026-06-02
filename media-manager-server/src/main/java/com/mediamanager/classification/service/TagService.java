@@ -7,6 +7,7 @@ import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,7 @@ public class TagService {
 
     private final TagRepository tagRepository;
     private final MediaItemRepository mediaItemRepository;
+    private final LibraryAccessService libraryAccessService;
 
     public List<TagResponse> getAllTags() {
         return tagRepository.findAll().stream()
@@ -72,6 +74,7 @@ public class TagService {
     public void addTagToItem(Integer mediaItemId, Integer tagId) {
         MediaItem item = mediaItemRepository.findById(mediaItemId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
+        libraryAccessService.assertCanEditItem(item);
         Tag tag = tagRepository.findById(tagId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
         item.getTags().add(tag);
@@ -82,6 +85,7 @@ public class TagService {
     public void removeTagFromItem(Integer mediaItemId, Integer tagId) {
         MediaItem item = mediaItemRepository.findById(mediaItemId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
+        libraryAccessService.assertCanEditItem(item);
         item.getTags().removeIf(t -> t.getId().equals(tagId));
         mediaItemRepository.save(item);
     }
@@ -91,6 +95,7 @@ public class TagService {
         List<Tag> tags = tagRepository.findAllById(request.getTagIds());
         List<MediaItem> items = mediaItemRepository.findAllById(request.getMediaItemIds());
         for (MediaItem item : items) {
+            libraryAccessService.assertCanEditItem(item);
             item.getTags().addAll(tags);
         }
         mediaItemRepository.saveAll(items);

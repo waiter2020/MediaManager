@@ -10,9 +10,24 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canViewMedia: has('media:view'),
     canPlayMedia: has('media:play'),
     canEditMetadata: has('media:edit_metadata'),
+    canRefreshMetadata: has('media:refresh'),
+    canAssignTags: has('tag:assign'),
+    canEditLibraryOnly: has('library:edit'),
     canManageTags: has('tag:manage'),
     canManageCategories: has('category:manage'),
     canViewTasks: has('task:view'),
     canDeleteMedia: has('media:delete'),
+    canDeleteSourceFile: has('media:delete_file'),
+    canScanLibrary: has('library:scan') || has('library:edit'),
+    canEditLibraryPlugins: has('library:edit'),
+    canDeleteLibrary: has('library:delete'),
+    canViewRecycleBin: has('media:view'),
+    canAccessSettings:
+      has('system:manage') ||
+      has('user:manage') ||
+      has('category:manage') ||
+      has('task:view') ||
+      has('library:create') ||
+      has('library:edit'),
   };
 }

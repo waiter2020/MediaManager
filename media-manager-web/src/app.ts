@@ -1,10 +1,45 @@
-import { RunTimeLayoutConfig, useModel } from '@umijs/max';
+import { RunTimeLayoutConfig } from '@umijs/max';
 import { message } from 'antd';
-import React, { useEffect } from 'react';
+import React from 'react';
+import ScanProgressBanner from '@/components/ScanProgressBanner';
+import ScrapeProgressBanner from '@/components/ScrapeProgressBanner';
+import LibraryAccessBanner from '@/components/LibraryAccessBanner';
+import { fetchAndApplyGlobalTheme, resolveEffectiveTheme, type ThemePreference } from '@/utils/theme';
+import {
+  clearSessionTokens,
+  fetchCurrentUser,
+  fetchSetupStatus,
+  getAccessToken,
+  getRefreshToken,
+  postLogout,
+  redirectToLogin,
+  redirectToSetup,
+  refreshSession,
+} from '@/utils/authSession';
 
-export const layout: RunTimeLayoutConfig = () => {
+type RequestOptions = {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  data?: unknown;
+  params?: Record<string, any>;
+};
+
+export const layout: RunTimeLayoutConfig = ({ initialState }) => {
+  const themePref = (initialState?.theme as ThemePreference | undefined) ?? 'dark';
+  const effective = resolveEffectiveTheme(themePref);
+
   return {
-    navTheme: 'realDark',
+    childrenRender: (children) =>
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ScanProgressBanner),
+        React.createElement(ScrapeProgressBanner),
+        React.createElement(LibraryAccessBanner),
+        children,
+      ),
+    navTheme: effective === 'light' ? 'light' : 'realDark',
     logo: false,
     title: 'MediaManager',
     menu: {
@@ -19,127 +54,184 @@ export const layout: RunTimeLayoutConfig = () => {
         colorMenuBackground: 'transparent',
         colorTextMenu: 'rgba(255,255,255,0.65)',
         colorTextMenuSelected: '#fff',
-        colorBgMenuItemSelected: 'rgba(22,104,220,0.15)',
+        colorBgMenuItemSelected: 'rgba(47,125,246,0.18)',
         colorTextMenuItemHover: '#fff',
         colorBgMenuItemHover: 'rgba(255,255,255,0.06)',
       },
       header: {
-        colorBgHeader: 'rgba(10,10,15,0.85)',
+        colorBgHeader: 'rgba(8,9,16,0.74)',
       },
-      colorPrimary: '#1668dc',
+      colorPrimary: '#2f7df6',
     },
-    logout: () => {
-      localStorage.removeItem('accessToken');
-      localStorage.removeItem('refreshToken');
+    menuFooterRender: () =>
+      React.createElement(
+        'a',
+        {
+          href: '/settings/profile',
+          style: { color: 'rgba(255,255,255,0.65)', padding: '8px 16px', display: 'block' },
+        },
+        '个人设置',
+      ),
+    logout: async () => {
+      const refreshToken = getRefreshToken();
+      if (refreshToken) {
+        try {
+          await postLogout(refreshToken);
+        } catch {
+          // The client should still clear local state even when server-side logout fails.
+        }
+      }
+      clearSessionTokens();
       window.location.href = '/login';
-    },
-    childrenRender: (children: React.ReactNode) => {
-      return React.createElement(SSEWrapper, null, children);
     },
   };
 };
 
-const SSEWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // @ts-ignore
-  const { connectSse } = useModel('global');
-
-  useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
-      return;
-    }
-    const clientId = 'client-' + Math.random().toString(36).substring(7);
-    const sse = connectSse(clientId);
-    return () => {
-      if (sse) sse.close();
-    };
-  }, []);
-
-  return React.createElement(React.Fragment, null, children);
-};
-
-
 export const request = {
   timeout: 30000,
   errorConfig: {
-    errorHandler(error: any) {
+    errorHandler(error: { response?: Response }) {
       const { response } = error || {};
       if (response?.status === 401) {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        if (window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
-          window.location.href = '/login';
-        }
+        clearSessionTokens();
+        redirectToLogin();
       } else if (response?.status === 403) {
         message.error('没有权限执行此操作');
-      } else if (response?.status >= 500) {
+      } else if (response?.status && response.status >= 500) {
         message.error('服务器错误，请稍后重试');
       }
     },
   },
   requestInterceptors: [
-    (url: string, options: any) => {
-      const token = localStorage.getItem('accessToken');
+    (url: string, options: RequestOptions) => {
+      const token = getAccessToken();
+      const headers = { ...options.headers };
       if (token) {
-        options.headers = {
-          ...options.headers,
-          Authorization: `Bearer ${token}`,
-        };
+        headers.Authorization = `Bearer ${token}`;
       }
-      return { url, options };
+
+      let params = options.params;
+      if (params && typeof params === 'object') {
+        const newParams = { ...params };
+        Object.keys(newParams).forEach((key) => {
+          if (Array.isArray(newParams[key])) {
+            newParams[key] = newParams[key].join(',');
+          }
+        });
+        params = newParams;
+      }
+
+      return {
+        url,
+        options: {
+          ...options,
+          headers,
+          params,
+        },
+      };
     },
   ],
   responseInterceptors: [
-    async (response: any) => {
-      if (response.status === 401 && window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
-        const refreshToken = localStorage.getItem('refreshToken');
-        if (refreshToken) {
-          try {
-            const res = await fetch('/api/v1/auth/refresh', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ refreshToken }),
-            });
-            const data = await res.json();
-            if (data.code === 200 && data.data?.accessToken) {
-              localStorage.setItem('accessToken', data.data.accessToken);
-              if (data.data.refreshToken) {
-                localStorage.setItem('refreshToken', data.data.refreshToken);
-              }
-              return response;
-            }
-          } catch (e) {
-            // refresh failed
-          }
-        }
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
-        window.location.href = '/login';
+    async (response: Response, options: RequestOptions) => {
+      if (response.status !== 401) {
+        return response;
       }
+      if (window.location.pathname === '/login' || window.location.pathname === '/setup') {
+        return response;
+      }
+
+      try {
+        const tokens = await refreshSession();
+        if (tokens?.accessToken) {
+          const retryUrl = options?.url ?? response.url;
+          const retryHeaders: Record<string, string> = {
+            ...(options?.headers || {}),
+            Authorization: `Bearer ${tokens.accessToken}`,
+          };
+          const retryInit: RequestInit = {
+            method: options?.method || 'GET',
+            headers: retryHeaders,
+          };
+          if (options?.data != null && options.method !== 'GET') {
+            retryInit.body =
+              typeof options.data === 'string' ? options.data : JSON.stringify(options.data);
+            if (!retryHeaders['Content-Type']) {
+              retryHeaders['Content-Type'] = 'application/json';
+            }
+          }
+          return fetch(retryUrl, retryInit);
+        }
+      } catch {
+        // Refresh failed. Fall through to local logout.
+      }
+
+      clearSessionTokens();
+      redirectToLogin();
       return response;
     },
   ],
 };
 
-export async function getInitialState() {
-  const token = localStorage.getItem('accessToken');
+function mapCurrentUser(data: API.CurrentUser | undefined): API.CurrentUser | undefined {
+  if (!data) return undefined;
+  return {
+    id: data.id,
+    username: data.username,
+    displayName: data.displayName,
+    avatarPath: data.avatarPath,
+    permissions: data.permissions ?? [],
+    roles: data.roles,
+  };
+}
+
+export async function getInitialState(): Promise<{
+  isLogin: boolean;
+  setupCompleted: boolean;
+  currentUser?: API.CurrentUser;
+  theme?: ThemePreference;
+}> {
+  const theme = await fetchAndApplyGlobalTheme();
+  const token = getAccessToken();
+
   if (!token) {
     try {
-      const res = await fetch('/api/v1/system/status');
-      const data = await res.json();
-      if (!data.data?.setupCompleted) {
-        if (window.location.pathname !== '/setup') {
-          window.location.href = '/setup';
-        }
-        return { isLogin: false, setupCompleted: false };
+      const statusRes = await fetchSetupStatus();
+      if (!statusRes.data?.setupCompleted) {
+        redirectToSetup();
+        return { isLogin: false, setupCompleted: false, theme };
       }
-    } catch (e) {
-      // ignore network errors for initial state
+    } catch {
+      try {
+        const res = await fetch('/api/v1/system/status');
+        const data = await res.json();
+        if (!data.data?.setupCompleted) {
+          redirectToSetup();
+          return { isLogin: false, setupCompleted: false, theme };
+        }
+      } catch {
+        // Keep startup resilient while the API is booting.
+      }
     }
-    if (window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
-      window.location.href = '/login';
-    }
-    return { isLogin: false, setupCompleted: true };
+
+    redirectToLogin();
+    return { isLogin: false, setupCompleted: true, theme };
   }
-  return { isLogin: true, setupCompleted: true };
+
+  try {
+    const meRes = await fetchCurrentUser();
+    if (meRes.code === 200 && meRes.data) {
+      return {
+        isLogin: true,
+        setupCompleted: true,
+        currentUser: mapCurrentUser(meRes.data),
+        theme,
+      };
+    }
+  } catch {
+    // Fall through to local logout.
+  }
+
+  clearSessionTokens();
+  redirectToLogin();
+  return { isLogin: false, setupCompleted: true, theme };
 }

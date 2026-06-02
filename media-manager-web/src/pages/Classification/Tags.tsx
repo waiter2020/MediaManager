@@ -1,26 +1,24 @@
-import React, { useState, useRef } from 'react';
-import { PageContainer } from '@ant-design/pro-components';
-import { ProTable } from '@ant-design/pro-components';
+import React, { useRef, useState } from 'react';
+import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType, ProColumns } from '@ant-design/pro-components';
-import { Button, Modal, Form, Input, ColorPicker, message, Popconfirm, Tag, Space } from 'antd';
+import { Button, ColorPicker, Form, Input, Modal, Popconfirm, Tag, message } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { getTags, createTag, updateTag, deleteTag } from '@/services/classification';
+import { history } from '@umijs/max';
+import { createTag, deleteTag, getTags, updateTag, type TagItem, type TagPayload } from '@/services/classification';
 
 const TagsManagement: React.FC = () => {
   const actionRef = useRef<ActionType>();
   const [modalVisible, setModalVisible] = useState(false);
-  const [editingTag, setEditingTag] = useState<any>(null);
-  const [form] = Form.useForm();
+  const [editingTag, setEditingTag] = useState<TagItem | null>(null);
+  const [form] = Form.useForm<TagPayload>();
 
-  const columns: ProColumns[] = [
+  const columns: ProColumns<TagItem>[] = [
     { title: 'ID', dataIndex: 'id', width: 60, search: false },
     {
       title: '标签名',
       dataIndex: 'name',
       width: 150,
-      render: (_, record) => (
-        <Tag color={record.color || undefined}>{record.name}</Tag>
-      ),
+      render: (_, record) => <Tag color={record.color || undefined}>{record.name}</Tag>,
     },
     { title: '颜色', dataIndex: 'color', width: 100, search: false, render: (text) => text || '-' },
     { title: '来源', dataIndex: 'source', width: 100, search: false },
@@ -30,16 +28,25 @@ const TagsManagement: React.FC = () => {
       valueType: 'option',
       width: 150,
       render: (_, record) => [
-        <a key="edit" onClick={() => {
-          setEditingTag(record);
-          form.setFieldsValue({ name: record.name, color: record.color });
-          setModalVisible(true);
-        }}>编辑</a>,
-        <Popconfirm key="delete" title="确定删除此标签？" onConfirm={async () => {
-          await deleteTag(record.id);
-          message.success('已删除');
-          actionRef.current?.reload();
-        }}>
+        <a
+          key="edit"
+          onClick={() => {
+            setEditingTag(record);
+            form.setFieldsValue({ name: record.name, color: record.color });
+            setModalVisible(true);
+          }}
+        >
+          编辑
+        </a>,
+        <Popconfirm
+          key="delete"
+          title="确定删除此标签？"
+          onConfirm={async () => {
+            await deleteTag(record.id);
+            message.success('已删除');
+            actionRef.current?.reload();
+          }}
+        >
           <a style={{ color: '#ff4d4f' }}>删除</a>
         </Popconfirm>,
       ],
@@ -48,8 +55,11 @@ const TagsManagement: React.FC = () => {
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
-    const color = typeof values.color === 'string' ? values.color : values.color?.toHexString?.() || values.color;
-    const payload = { name: values.name, color };
+    const color =
+      typeof values.color === 'string'
+        ? values.color
+        : (values.color as { toHexString?: () => string } | undefined)?.toHexString?.() || values.color;
+    const payload: TagPayload = { name: values.name, color: color ? String(color) : undefined };
 
     if (editingTag) {
       await updateTag(editingTag.id, payload);
@@ -65,8 +75,15 @@ const TagsManagement: React.FC = () => {
   };
 
   return (
-    <PageContainer title="标签管理">
-      <ProTable
+    <PageContainer
+      title="标签管理"
+      extra={
+        <Button type="link" onClick={() => history.push('/settings/rules')}>
+          分类规则
+        </Button>
+      }
+    >
+      <ProTable<TagItem>
         actionRef={actionRef}
         columns={columns}
         rowKey="id"
@@ -76,11 +93,16 @@ const TagsManagement: React.FC = () => {
           return { data: res.data || [], success: true };
         }}
         toolBarRender={() => [
-          <Button key="create" type="primary" icon={<PlusOutlined />} onClick={() => {
-            setEditingTag(null);
-            form.resetFields();
-            setModalVisible(true);
-          }}>
+          <Button
+            key="create"
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              setEditingTag(null);
+              form.resetFields();
+              setModalVisible(true);
+            }}
+          >
             新建标签
           </Button>,
         ]}
@@ -88,11 +110,14 @@ const TagsManagement: React.FC = () => {
       <Modal
         title={editingTag ? '编辑标签' : '新建标签'}
         open={modalVisible}
-        onCancel={() => { setModalVisible(false); setEditingTag(null); }}
+        onCancel={() => {
+          setModalVisible(false);
+          setEditingTag(null);
+        }}
         onOk={handleSubmit}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="标签名" rules={[{ required: true }]}>
+          <Form.Item name="name" label="标签名" rules={[{ required: true, message: '请输入标签名' }]}>
             <Input />
           </Form.Item>
           <Form.Item name="color" label="颜色">

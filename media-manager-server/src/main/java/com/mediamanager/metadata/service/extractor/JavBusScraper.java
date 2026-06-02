@@ -3,10 +3,12 @@ package com.mediamanager.metadata.service.extractor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mediamanager.library.entity.LibraryExtractorConfig;
-import com.mediamanager.metadata.spi.MetadataExtractor;
+import com.mediamanager.media.entity.MediaFile;
+import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.metadata.spi.MetadataResult;
+import com.mediamanager.metadata.spi.MetadataScraper;
 import com.mediamanager.metadata.util.FileNameParser;
+import com.mediamanager.plugin.entity.LibraryPluginConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -18,24 +20,16 @@ import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Scrapes metadata from JavBus website by parsing HTML.
- * Extracts title, cover image, release date, duration, studio, genres, and cast.
- *
- * Config JSON (in LibraryExtractorConfig.config):
- * {
- *   "baseUrl": "https://www.javbus.com"   // optional, supports mirror sites
- * }
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class JavBusExtractor implements MetadataExtractor {
+public class JavBusScraper implements MetadataScraper {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -67,17 +61,49 @@ public class JavBusExtractor implements MetadataExtractor {
     }
 
     @Override
-    public MetadataResult extract(ExtractorContext context, LibraryExtractorConfig config) {
+    public MetadataResult scrape(ScrapeContext context, LibraryPluginConfig config) {
         if (context.primaryFile() == null) return null;
 
-        // Try to get code from providerIds first, then from filename
         String code = extractCode(context);
         if (code == null) {
             log.debug("No JAV code found for item {}", context.mediaItem().getId());
             return null;
         }
+        return fetchByCode(code, config.getConfig());
+    }
 
-        String baseUrl = extractBaseUrl(config.getConfig());
+    @Override
+    public List<Map<String, Object>> searchCandidates(String query, LibraryPluginConfig config, String mediaType, String language) {
+        return searchCandidates(query, config.getConfig());
+    }
+
+    @Override
+    public MetadataResult fetchByExternalId(String externalId, LibraryPluginConfig config, String mediaType, String language) {
+        return fetchByCode(externalId, config.getConfig());
+    }
+
+    public List<Map<String, Object>> searchCandidates(String query, String configJson) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        String code = query.trim().toUpperCase();
+        MetadataResult result = fetchByCode(code, configJson);
+        if (result == null) {
+            return List.of();
+        }
+        Map<String, Object> row = new HashMap<>();
+        row.put("externalId", code);
+        row.put("title", result.getTitle() != null ? result.getTitle() : code);
+        row.put("releaseDate", result.getReleaseDate() != null ? result.getReleaseDate().toString() : "");
+        row.put("provider", "javbus");
+        return List.of(row);
+    }
+
+    public MetadataResult fetchByCode(String code, String configJson) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+        String baseUrl = extractBaseUrl(configJson);
         String url = baseUrl + "/" + code;
 
         try {
@@ -101,7 +127,6 @@ public class JavBusExtractor implements MetadataExtractor {
             if (titleMatcher.find()) {
                 String fullTitle = titleMatcher.group(1).trim();
                 result.setTitle(fullTitle);
-                // Use the part after the code as original title
                 if (fullTitle.toUpperCase().startsWith(code.toUpperCase())) {
                     String remainder = fullTitle.substring(code.length()).trim();
                     if (!remainder.isEmpty()) {
@@ -178,21 +203,15 @@ public class JavBusExtractor implements MetadataExtractor {
         }
     }
 
-    /**
-     * Extract JAV code from accumulated result providerIds or from filename.
-     */
-    private String extractCode(ExtractorContext context) {
-        // Check providerIds first
+    private String extractCode(ScrapeContext context) {
         MetadataResult accumulated = context.currentAccumulatedResult();
         if (accumulated != null && accumulated.getProviderIds() != null) {
             String code = accumulated.getProviderIds().get("javbus");
             if (code != null && !code.isEmpty()) return code;
-            // Also check generic "jav_code" key
             code = accumulated.getProviderIds().get("jav_code");
             if (code != null && !code.isEmpty()) return code;
         }
 
-        // Try extracting from filename
         String fileName = context.primaryFile().getFileName();
         return FileNameParser.extractJavCode(fileName);
     }

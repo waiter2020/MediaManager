@@ -15,22 +15,29 @@ import com.mediamanager.metadata.spi.MetadataResult;
 import com.mediamanager.metadata.util.FileNameParser;
 import com.mediamanager.sync.service.SseService;
 import com.mediamanager.system.dto.SystemLogEventDto;
+import com.mediamanager.system.service.LibraryAccessService;
 import com.mediamanager.system.service.SystemLogBroadcaster;
+import com.mediamanager.common.security.SecurityCurrentUser;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -48,6 +55,9 @@ public class ScrapeTaskService {
     private final MediaPostProcessService mediaPostProcessService;
     private final SseService sseService;
     private final ObjectMapper objectMapper;
+    private final LibraryAccessService libraryAccessService;
+    private final SecurityCurrentUser securityCurrentUser;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${mediamanager.scraper.request-delay-ms:2000}")
     private long requestDelayMs;
@@ -60,6 +70,39 @@ public class ScrapeTaskService {
 
     /** Basic library-level mutex to avoid hammering same library concurrently (single-instance). */
     private final Map<Integer, Object> libraryLocks = new ConcurrentHashMap<>();
+    private final ExecutorService scrapeExecutor = Executors.newFixedThreadPool(2);
+
+    private static final Set<String> TERMINAL_STATUSES = Set.of("SUCCESS", "FAILED", "CANCELLED");
+
+    @PreDestroy
+    public void shutdown() {
+        scrapeExecutor.shutdown();
+        try {
+            if (!scrapeExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                scrapeExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            scrapeExecutor.shutdownNow();
+        }
+    }
+
+    private void transitionStatus(ScrapeTask task, String newStatus) {
+        String current = task.getStatus();
+        if (TERMINAL_STATUSES.contains(current)) {
+            log.warn("Ignoring illegal scrape task transition {} -> {} for task {}", current, newStatus, task.getId());
+            return;
+        }
+        if ("PENDING".equals(current) && !Set.of("RUNNING", "CANCELLED").contains(newStatus)) {
+            log.warn("Ignoring illegal scrape task transition {} -> {} for task {}", current, newStatus, task.getId());
+            return;
+        }
+        if ("RUNNING".equals(current) && !Set.of("SUCCESS", "FAILED", "CANCELLED").contains(newStatus)) {
+            log.warn("Ignoring illegal scrape task transition {} -> {} for task {}", current, newStatus, task.getId());
+            return;
+        }
+        task.setStatus(newStatus);
+    }
 
     // ── Public API ──────────────────────────────────────────
 
@@ -122,6 +165,12 @@ public class ScrapeTaskService {
             String paramsJson
     ) {
 
+        Set<Integer> viewableLibraries = libraryAccessService.resolveLibraryFilter(libraryId);
+        if (viewableLibraries.isEmpty()) {
+            log.warn("No viewable libraries for scrape (libraryId={})", libraryId);
+            return null;
+        }
+
         MediaLibrary library = null;
         if (libraryId != null) {
             library = libraryRepository.findById(libraryId).orElse(null);
@@ -158,8 +207,7 @@ public class ScrapeTaskService {
         broadcastLog("INFO", "SCRAPE_CREATED",
                 libraryId, "Created scrape task for " + items.size() + " items");
 
-        // Launch async execution
-        executeScrapeAsync(task.getId());
+        scrapeExecutor.submit(() -> executeScrapeInBackground(task.getId()));
 
         return toResponse(task);
     }
@@ -167,9 +215,10 @@ public class ScrapeTaskService {
     @Transactional
     public boolean cancelTask(Integer taskId) {
         return scrapeTaskRepository.findById(taskId).map(task -> {
+            assertCanViewTask(task);
             if ("RUNNING".equals(task.getStatus()) || "PENDING".equals(task.getStatus())) {
                 cancelledTasks.put(taskId, true);
-                task.setStatus("CANCELLED");
+                transitionStatus(task, "CANCELLED");
                 task.setFinishedAt(Instant.now());
                 scrapeTaskRepository.save(task);
                 log.info("Cancelled scrape task {}", taskId);
@@ -182,6 +231,7 @@ public class ScrapeTaskService {
     @Transactional(readOnly = true)
     public List<ScrapeTaskResponse> getAllTasks() {
         return scrapeTaskRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(this::canViewTask)
                 .map(this::toResponse)
                 .collect(Collectors.toList());
     }
@@ -189,6 +239,7 @@ public class ScrapeTaskService {
     @Transactional(readOnly = true)
     public List<ScrapeTaskResponse> getTasksByScheduleId(Long scheduleId) {
         return scrapeTaskRepository.findByScheduleIdOrderByCreatedAtDesc(scheduleId).stream()
+                .filter(this::canViewTask)
                 .map(this::toResponse)
                 .collect(Collectors.toList());
     }
@@ -196,92 +247,119 @@ public class ScrapeTaskService {
     @Transactional(readOnly = true)
     public ScrapeTaskResponse getTask(Integer taskId) {
         return scrapeTaskRepository.findById(taskId)
+                .filter(this::canViewTask)
                 .map(this::toResponse)
                 .orElse(null);
     }
 
     // ── Async Execution ─────────────────────────────────────
 
-    @Async
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void executeScrapeAsync(Integer taskId) {
-        ScrapeTask task = scrapeTaskRepository.findById(taskId).orElse(null);
-        if (task == null) return;
-
-        task.setStatus("RUNNING");
-        task.setStartedAt(Instant.now());
-        scrapeTaskRepository.save(task);
+    public void executeScrapeInBackground(Integer taskId) {
+        TaskSnapshot snapshot = markTaskRunning(taskId);
+        if (snapshot == null) {
+            return;
+        }
 
         sseService.broadcast("scrape-start", "Scrape task " + taskId + " started");
-        broadcastLog("INFO", "SCRAPE_START",
-                task.getLibrary() != null ? task.getLibrary().getId() : null,
-                "Started scrape task " + taskId);
+        broadcastLog("INFO", "SCRAPE_START", snapshot.libraryId(), "Started scrape task " + taskId);
 
-        Integer libraryId = task.getLibrary() != null ? task.getLibrary().getId() : null;
-        String effectiveTarget = task.getTargetStatus() != null ? task.getTargetStatus() : "UNIDENTIFIED";
-        String effectiveMediaTypesJson = (task.getMediaTypes() != null && !task.getMediaTypes().isBlank())
-                ? task.getMediaTypes()
-                : null;
-
-        // Re-query by the task snapshot to keep semantics consistent.
-        List<MediaItem> items = findItemsByTarget(libraryId, effectiveTarget, effectiveMediaTypesJson);
+        List<MediaItem> items = findItemsByTarget(snapshot.libraryId(), snapshot.targetStatus(), snapshot.mediaTypesJson());
+        if (snapshot.batchSize() > 0 && items.size() > snapshot.batchSize()) {
+            items = new ArrayList<>(items.subList(0, snapshot.batchSize()));
+        }
 
         int scraped = 0;
         int errors = 0;
         StringBuilder errorLog = new StringBuilder();
 
-        Object lock = libraryId != null ? libraryLocks.computeIfAbsent(libraryId, k -> new Object()) : new Object();
-        synchronized (lock) {
-            for (MediaItem item : items) {
-                // Check cancellation
-                if (cancelledTasks.remove(taskId) != null) {
-                    log.info("Scrape task {} was cancelled after {} items", taskId, scraped);
-                    break;
-                }
-
-                try {
-                    scrapeItem(item);
-                    scraped++;
-                } catch (Exception e) {
-                    errors++;
-                    String msg = String.format("Item %d (%s): %s\n", item.getId(), item.getTitle(), e.getMessage());
-                    errorLog.append(msg);
-                    log.error("Failed to scrape item {}", item.getId(), e);
-                }
-
-                // Update progress
-                updateTaskProgress(taskId, scraped, errors, errorLog.toString());
-
-                // Rate limiting (can be overridden by params_json in future)
-                long effectiveDelayMs = requestDelayMs;
-                if (effectiveDelayMs > 0) {
-                    try {
-                        Thread.sleep(effectiveDelayMs);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+        Object lock = snapshot.libraryId() != null
+                ? libraryLocks.computeIfAbsent(snapshot.libraryId(), k -> new Object())
+                : new Object();
+        try {
+            synchronized (lock) {
+                for (MediaItem item : items) {
+                    if (cancelledTasks.remove(taskId) != null || isTaskCancelled(taskId)) {
+                        log.info("Scrape task {} was cancelled after {} items", taskId, scraped);
                         break;
+                    }
+
+                    try {
+                        scrapeItem(item);
+                        scraped++;
+                    } catch (Exception e) {
+                        errors++;
+                        String msg = String.format("Item %d (%s): %s\n", item.getId(), item.getTitle(), e.getMessage());
+                        errorLog.append(msg);
+                        log.error("Failed to scrape item {}", item.getId(), e);
+                    }
+
+                    updateTaskProgress(taskId, scraped, errors, errorLog.toString());
+
+                    if (snapshot.requestDelayMs() > 0) {
+                        try {
+                            Thread.sleep(snapshot.requestDelayMs());
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
                     }
                 }
             }
+        } finally {
+            if (snapshot.libraryId() != null) {
+                libraryLocks.remove(snapshot.libraryId(), lock);
+            }
         }
 
-        // Finalize
         finalizeTask(taskId, scraped, errors, errorLog.toString());
+    }
+
+    private TaskSnapshot markTaskRunning(Integer taskId) {
+        return transactionTemplate.execute(status -> scrapeTaskRepository.findById(taskId)
+                .map(task -> {
+                    if ("CANCELLED".equals(task.getStatus())) {
+                        return null;
+                    }
+                    transitionStatus(task, "RUNNING");
+                    task.setStartedAt(Instant.now());
+                    scrapeTaskRepository.save(task);
+                    Integer libraryId = task.getLibrary() != null ? task.getLibrary().getId() : null;
+                    String effectiveTarget = task.getTargetStatus() != null ? task.getTargetStatus() : "UNIDENTIFIED";
+                    String effectiveMediaTypesJson = (task.getMediaTypes() != null && !task.getMediaTypes().isBlank())
+                            ? task.getMediaTypes()
+                            : null;
+                    ScrapeParams params = parseParams(task.getParamsJson());
+                    return new TaskSnapshot(
+                            libraryId,
+                            effectiveTarget,
+                            effectiveMediaTypesJson,
+                            params.requestDelayMs(),
+                            params.batchSize());
+                })
+                .orElse(null));
     }
 
     // ── Item-level scraping ─────────────────────────────────
 
     private void scrapeItem(MediaItem item) {
-        List<MediaFile> files = mediaFileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
-        MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
+        transactionTemplate.executeWithoutResult(status -> {
+            List<MediaFile> files = mediaFileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
+            MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
 
-        MetadataResult pipelineResult = pipelineService.executeScrapePipeline(item, primaryFile);
-        if (pipelineResult.getTitle() == null && primaryFile != null) {
-            MetadataResult fallback = fileNameParser.parse(primaryFile.getFileName());
-            pipelineResult.mergeFrom(fallback);
-        }
-        metadataApplyService.applyResult(item, pipelineResult, primaryFile);
-        mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
+            MetadataResult pipelineResult = pipelineService.executeScrapePipeline(item, primaryFile);
+            if (pipelineResult.getTitle() == null && primaryFile != null) {
+                MetadataResult fallback = fileNameParser.parse(primaryFile.getFileName());
+                pipelineResult.mergeFrom(fallback);
+            }
+            metadataApplyService.applyResult(item, pipelineResult, primaryFile);
+            mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
+        });
+    }
+
+    private boolean isTaskCancelled(Integer taskId) {
+        return transactionTemplate.execute(status -> scrapeTaskRepository.findById(taskId)
+                .map(task -> "CANCELLED".equals(task.getStatus()))
+                .orElse(true));
     }
 
     // ── Progress helpers ────────────────────────────────────
@@ -294,13 +372,14 @@ public class ScrapeTaskService {
             if (errorLog != null && !errorLog.isEmpty()) task.setErrorLog(errorLog);
             scrapeTaskRepository.save(task);
 
-            // SSE broadcast progress
-            sseService.broadcast("scrape-progress", Map.of(
+            Map<String, Object> progressPayload = Map.of(
                     "taskId", taskId,
+                    "status", "RUNNING",
                     "scraped", scraped,
                     "errors", errors,
                     "total", task.getTotalItems()
-            ));
+            );
+            sseService.broadcastBoth("scrape-progress", "scrape.task.updated", progressPayload);
         });
     }
 
@@ -308,7 +387,7 @@ public class ScrapeTaskService {
     public void finalizeTask(Integer taskId, int scraped, int errors, String errorLog) {
         scrapeTaskRepository.findById(taskId).ifPresent(task -> {
             if (!"CANCELLED".equals(task.getStatus())) {
-                task.setStatus(errors > 0 && scraped == 0 ? "FAILED" : "SUCCESS");
+                transitionStatus(task, errors > 0 && scraped == 0 ? "FAILED" : "SUCCESS");
             }
             task.setScrapedItems(scraped);
             task.setErrorItems(errors);
@@ -333,19 +412,45 @@ public class ScrapeTaskService {
     // ── Helpers ──────────────────────────────────────────────
 
     private List<MediaItem> findItemsByTarget(Integer libraryId, String targetStatus, String mediaTypesJson) {
+        Set<Integer> viewableLibraries = libraryAccessService.resolveLibraryFilter(libraryId);
+        if (viewableLibraries.isEmpty()) {
+            return List.of();
+        }
         Set<String> mediaTypes = parseMediaTypes(mediaTypesJson);
 
         if ("ALL".equalsIgnoreCase(targetStatus)) {
             List<MediaItem> items = (libraryId != null)
                     ? mediaItemRepository.findByLibraryIdOrderByIdAsc(libraryId)
                     : mediaItemRepository.findAllByOrderByIdAsc();
-            return filterByMediaTypes(items, mediaTypes);
+            return filterByViewableLibraries(filterByMediaTypes(items, mediaTypes), viewableLibraries);
         }
         // UNIDENTIFIED or IDENTIFIED
         List<MediaItem> items = (libraryId != null)
                 ? mediaItemRepository.findByLibraryIdAndStatusOrderByIdAsc(libraryId, targetStatus)
                 : mediaItemRepository.findByStatusOrderByIdAsc(targetStatus);
-        return filterByMediaTypes(items, mediaTypes);
+        return filterByViewableLibraries(filterByMediaTypes(items, mediaTypes), viewableLibraries);
+    }
+
+    private List<MediaItem> filterByViewableLibraries(List<MediaItem> items, Set<Integer> viewableLibraries) {
+        return items.stream()
+                .filter(i -> i.getLibrary() != null && viewableLibraries.contains(i.getLibrary().getId()))
+                .collect(Collectors.toList());
+    }
+
+    private boolean canViewTask(ScrapeTask task) {
+        if (task.getLibrary() == null) {
+            return libraryAccessService.bypassesLibraryRestrictions(
+                    securityCurrentUser.getCurrentUser().orElse(null));
+        }
+        return libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser())
+                .contains(task.getLibrary().getId());
+    }
+
+    private void assertCanViewTask(ScrapeTask task) {
+        if (!canViewTask(task)) {
+            throw new com.mediamanager.common.exception.BusinessException(
+                    com.mediamanager.common.exception.ErrorCode.LIBRARY_ACCESS_DENIED);
+        }
     }
 
     private ScrapeTaskResponse toResponse(ScrapeTask task) {
@@ -399,6 +504,28 @@ public class ScrapeTaskService {
         }
     }
 
+    private ScrapeParams parseParams(String paramsJson) {
+        long effectiveDelay = requestDelayMs;
+        int effectiveBatchSize = batchSize;
+        if (paramsJson == null || paramsJson.isBlank()) {
+            return new ScrapeParams(effectiveDelay, effectiveBatchSize);
+        }
+        try {
+            Map<?, ?> map = objectMapper.readValue(paramsJson, Map.class);
+            Object delay = map.get("requestDelayMs");
+            Object size = map.get("batchSize");
+            if (delay instanceof Number n) {
+                effectiveDelay = Math.max(0, n.longValue());
+            }
+            if (size instanceof Number n) {
+                effectiveBatchSize = Math.max(1, n.intValue());
+            }
+        } catch (Exception e) {
+            log.warn("Invalid scrape params JSON, using defaults: {}", paramsJson, e);
+        }
+        return new ScrapeParams(effectiveDelay, effectiveBatchSize);
+    }
+
     private void broadcastLog(String level, String type, Integer libraryId, String message) {
         SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
                 .timestamp(System.currentTimeMillis())
@@ -409,5 +536,14 @@ public class ScrapeTaskService {
                 .message(message)
                 .build());
     }
+
+    private record TaskSnapshot(
+            Integer libraryId,
+            String targetStatus,
+            String mediaTypesJson,
+            long requestDelayMs,
+            int batchSize) {}
+
+    private record ScrapeParams(long requestDelayMs, int batchSize) {}
 
 }

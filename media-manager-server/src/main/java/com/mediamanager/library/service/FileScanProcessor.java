@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Set;
 
 @Slf4j
@@ -32,6 +33,25 @@ public class FileScanProcessor {
     private final MetadataApplyService metadataApplyService;
     private final FileNameParser fileNameParser;
     private final MediaPostProcessService mediaPostProcessService;
+
+    public enum ScanOutcome {
+        SKIPPED(false),
+        UNCHANGED(true),
+        CREATED(true),
+        UPDATED(true),
+        RESTORED(true),
+        FAILED(true);
+
+        private final boolean matchedMediaFile;
+
+        ScanOutcome(boolean matchedMediaFile) {
+            this.matchedMediaFile = matchedMediaFile;
+        }
+
+        public boolean matchedMediaFile() {
+            return matchedMediaFile;
+        }
+    }
 
     private static final Set<String> VIDEO_EXTENSIONS = Set.of(
             "3gp", "asf", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4",
@@ -48,55 +68,68 @@ public class FileScanProcessor {
             "jpeg", "png", "tif", "tiff", "webp"
     );
 
-    public String checkFile(MediaLibrary library, Path file) {
+    public ScanOutcome scanFile(MediaLibrary library, Path file, BasicFileAttributes attrs) {
         String fileName = file.getFileName().toString();
         String extension = getExtension(fileName).toLowerCase();
         String mediaType = determineMediaType(library.getType(), extension);
         if (mediaType == null) {
-            return null;
+            return ScanOutcome.SKIPPED;
         }
-        String filePath = file.toAbsolutePath().toString();
-        if (fileRepository.existsByFilePathAndNotDeleted(filePath)) {
-            return null;
+
+        String filePath = normalizePath(file.toAbsolutePath().toString());
+        MediaFile existing = fileRepository.findByFilePath(filePath).orElse(null);
+        if (existing != null && !Boolean.TRUE.equals(existing.getDeleted()) && !hasFileChanged(existing, attrs)) {
+            if (existing.getMediaItem() != null) {
+                existing.getMediaItem().setLastScannedAt(Instant.now());
+                itemRepository.save(existing.getMediaItem());
+            }
+            return ScanOutcome.UNCHANGED;
         }
-        return mediaType;
+
+        try {
+            processFile(library, file, attrs, mediaType);
+            if (existing == null) {
+                return ScanOutcome.CREATED;
+            }
+            return Boolean.TRUE.equals(existing.getDeleted())
+                    ? ScanOutcome.RESTORED
+                    : ScanOutcome.UPDATED;
+        } catch (Exception e) {
+            log.error("Failed to scan media file: {}", filePath, e);
+            return ScanOutcome.FAILED;
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void processFile(MediaLibrary library, Path file, BasicFileAttributes attrs, String mediaType) {
         String fileName = file.getFileName().toString();
-        String filePath = file.toAbsolutePath().toString();
+        String filePath = normalizePath(file.toAbsolutePath().toString());
 
         log.debug("Found new file: {}", filePath);
 
-        MediaItem item = MediaItem.builder()
-                .library(library)
-                .title(fileName)
-                .originalTitle(fileName)
-                .type(mediaType)
-                .status("UNIDENTIFIED")
-                .lastScannedAt(Instant.now())
-                .build();
-        itemRepository.save(item);
+        MetadataResult fileNameResult = fileNameParser.parse(fileName);
+        MediaFile mediaFile = fileRepository.findByFilePath(filePath).orElseGet(MediaFile::new);
+        MediaItem item = mediaFile.getMediaItem() != null
+                ? mediaFile.getMediaItem()
+                : resolveItemForFile(library, fileName, mediaType, fileNameResult);
 
         String extension = getExtension(fileName).toLowerCase();
-        MediaFile mediaFile = MediaFile.builder()
-                .mediaItem(item)
-                .filePath(filePath)
-                .fileName(fileName)
-                .fileSize(attrs.size())
-                .container(extension)
-                .fileModifiedAt(attrs.lastModifiedTime().toInstant())
-                .deleted(false)
-                .build();
+        mediaFile.setMediaItem(item);
+        mediaFile.setFilePath(filePath);
+        mediaFile.setFileName(fileName);
+        mediaFile.setFileSize(attrs.size());
+        mediaFile.setContainer(extension);
+        mediaFile.setFileModifiedAt(attrs.lastModifiedTime().toInstant());
+        mediaFile.setDeleted(false);
+        mediaFile.setDeletedAt(null);
+        item.setHidden(false);
+        item.setLastScannedAt(Instant.now());
+        itemRepository.save(item);
         fileRepository.save(mediaFile);
 
         try {
             MetadataResult pipelineResult = pipelineService.executeLocalPipeline(item, mediaFile);
-            if (pipelineResult.getTitle() == null) {
-                MetadataResult fallback = fileNameParser.parse(fileName);
-                pipelineResult.mergeFrom(fallback);
-            }
+            pipelineResult.mergeFrom(fileNameResult);
             metadataApplyService.applyResult(item, pipelineResult, mediaFile);
             mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
             log.info("Successfully processed item: {}", item.getTitle());
@@ -105,6 +138,47 @@ public class FileScanProcessor {
             item.setStatus("ERROR");
             itemRepository.save(item);
         }
+    }
+
+    private MediaItem resolveItemForFile(
+            MediaLibrary library,
+            String fileName,
+            String mediaType,
+            MetadataResult fileNameResult) {
+        if ("TV_SHOW".equals(mediaType)
+                && fileNameResult.getSeasonNumber() != null
+                && fileNameResult.getEpisodeNumber() != null
+                && fileNameResult.getOriginalTitle() != null
+                && !fileNameResult.getOriginalTitle().isBlank()) {
+            String show = fileNameResult.getOriginalTitle();
+            String episodeTitle = String.format("%s S%02dE%02d",
+                    show,
+                    fileNameResult.getSeasonNumber(),
+                    fileNameResult.getEpisodeNumber());
+            return itemRepository
+                    .findTitleCandidates(library.getId(), "EPISODE", episodeTitle)
+                    .stream()
+                    .findFirst()
+                    .orElseGet(() -> createItem(library, episodeTitle, show, "EPISODE"));
+        }
+
+        String title = fileNameResult.getTitle() != null ? fileNameResult.getTitle() : fileName;
+        String originalTitle = fileNameResult.getOriginalTitle() != null
+                ? fileNameResult.getOriginalTitle()
+                : fileName;
+        return createItem(library, title, originalTitle, mediaType);
+    }
+
+    private MediaItem createItem(MediaLibrary library, String title, String originalTitle, String mediaType) {
+        MediaItem item = MediaItem.builder()
+                .library(library)
+                .title(title)
+                .originalTitle(originalTitle)
+                .type(mediaType)
+                .status("UNIDENTIFIED")
+                .lastScannedAt(Instant.now())
+                .build();
+        return itemRepository.save(item);
     }
 
     public String determineMediaType(String libraryType, String extension) {
@@ -144,5 +218,20 @@ public class FileScanProcessor {
     private String getExtension(String fileName) {
         int dotIndex = fileName.lastIndexOf('.');
         return (dotIndex == -1) ? "" : fileName.substring(dotIndex + 1);
+    }
+
+    private boolean hasFileChanged(MediaFile file, BasicFileAttributes attrs) {
+        Instant currentModifiedAt = attrs.lastModifiedTime().toInstant();
+        if (!Objects.equals(file.getFileSize(), attrs.size())) {
+            return true;
+        }
+        if (file.getFileModifiedAt() == null) {
+            return true;
+        }
+        return file.getFileModifiedAt().toEpochMilli() != currentModifiedAt.toEpochMilli();
+    }
+
+    private String normalizePath(String path) {
+        return path == null ? null : path.replace('\\', '/');
     }
 }

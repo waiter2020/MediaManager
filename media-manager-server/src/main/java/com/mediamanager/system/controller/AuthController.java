@@ -4,6 +4,7 @@ import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.system.dto.LoginRequest;
 import com.mediamanager.system.dto.LoginResponse;
 import com.mediamanager.system.dto.RefreshTokenRequest;
+import com.mediamanager.system.dto.SetupStatusResponse;
 import com.mediamanager.system.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,6 +31,12 @@ public class AuthController {
     public ApiResponse<Void> logout(@RequestParam String refreshToken) {
         authService.logout(refreshToken);
         return ApiResponse.success();
+    }
+
+    @GetMapping("/setup/status")
+    @Operation(summary = "Check whether initial setup is completed")
+    public ApiResponse<SetupStatusResponse> setupStatus() {
+        return ApiResponse.success(authService.getSetupStatus());
     }
 
     @PostMapping("/setup")

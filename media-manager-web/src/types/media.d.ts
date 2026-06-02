@@ -33,6 +33,7 @@ export interface MediaItem {
   createdAt?: string;
   updatedAt?: string;
   files?: MediaFile[];
+  fileIds?: number[];
   tags?: { id: number; name: string; color?: string }[];
   categories?: { id: number; name: string }[];
   movieMetadata?: {
@@ -67,5 +68,11 @@ export interface MediaItem {
     sampleRate?: number;
     channels?: number;
   };
+  tvShowMetadata?: {
+    status?: string;
+    network?: string;
+    genres?: string[] | string;
+  };
+  playbackPosition?: number;
 }
 

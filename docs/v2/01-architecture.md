@@ -95,9 +95,11 @@ sequenceDiagram
 |------|--------|--------|
 | 文件创建/修改/删除 | DirectoryWatcher | 防抖 → 增量扫描 |
 | 扫描进度 | LibraryScanService | SSE `scan.progress` |
-| 刮削状态 | ScrapeTaskService | SSE `scrape.task` |
+| 刮削状态 | ScrapeTaskService | SSE `scrape.task.updated` |
 | 元数据完成 | MetadataOrchestrator | 分类引擎、FTS 索引 Job |
-| 系统日志 | Logback Appender | SSE `system.log` |
+| 系统日志 | Logback Appender | SSE `log`（`/system/logs/stream`） |
+
+事件名、payload、legacy 弃用策略见 [`docs/v2/13-sse-event-dictionary.md`](docs/v2/13-sse-event-dictionary.md)。
 
 ## 6. 安全架构
 

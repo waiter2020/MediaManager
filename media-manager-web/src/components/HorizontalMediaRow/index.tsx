@@ -1,26 +1,17 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Button } from 'antd';
 import { history } from '@umijs/max';
 import MediaCard from '@/components/MediaCard';
+import type { MediaItem } from '@/types/media';
 import './index.css';
-
-interface MediaItem {
-  id: number;
-  title: string;
-  type?: string;
-  posterPath?: string | null;
-  fileIds?: number[];
-  rating?: number | null;
-  releaseDate?: string | null;
-  overview?: string | null;
-}
 
 interface HorizontalMediaRowProps {
   title: string;
   items: MediaItem[];
   viewAllLink?: string;
   loading?: boolean;
+  playMode?: 'detail' | 'resume';
 }
 
 const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
@@ -28,10 +19,21 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   items,
   viewAllLink,
   loading = false,
+  playMode = 'detail',
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const navigateItem = (item: MediaItem) => {
+    const playable = item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type);
+    if (playMode === 'resume' && playable) {
+      const position = item.playbackPosition && item.playbackPosition > 30 ? item.playbackPosition : 0;
+      history.push(`/player/${item.id}${position > 0 ? `?t=${position}` : ''}`);
+      return;
+    }
+    history.push(`/media/${item.id}`);
+  };
 
   const checkScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -43,14 +45,13 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   useEffect(() => {
     checkScroll();
     const el = scrollRef.current;
-    if (el) {
-      el.addEventListener('scroll', checkScroll, { passive: true });
-      window.addEventListener('resize', checkScroll);
-      return () => {
-        el.removeEventListener('scroll', checkScroll);
-        window.removeEventListener('resize', checkScroll);
-      };
-    }
+    if (!el) return undefined;
+    el.addEventListener('scroll', checkScroll, { passive: true });
+    window.addEventListener('resize', checkScroll);
+    return () => {
+      el.removeEventListener('scroll', checkScroll);
+      window.removeEventListener('resize', checkScroll);
+    };
   }, [checkScroll, items]);
 
   const scroll = (direction: 'left' | 'right') => {
@@ -116,7 +117,7 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
                 rating={item.rating}
                 releaseDate={item.releaseDate}
                 overview={item.overview}
-                onClick={() => history.push(`/media/${item.id}`)}
+                onClick={() => navigateItem(item)}
               />
             </div>
           ))}

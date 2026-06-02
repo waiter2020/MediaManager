@@ -4,6 +4,7 @@ import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
 import com.mediamanager.system.dto.*;
 import com.mediamanager.system.entity.LibraryAccess;
+import com.mediamanager.system.entity.SysPermission;
 import com.mediamanager.system.entity.SysRole;
 import com.mediamanager.system.entity.SysUser;
 import com.mediamanager.system.repository.LibraryAccessRepository;
@@ -175,6 +176,14 @@ public class UserService {
                                 .name(r.getName())
                                 .build())
                         .collect(Collectors.toList()))
+                .permissions(collectPermissions(user))
                 .build();
+    }
+
+    public static Set<String> collectPermissions(SysUser user) {
+        return user.getRoles().stream()
+                .flatMap(role -> role.getPermissions().stream())
+                .map(SysPermission::getCode)
+                .collect(Collectors.toSet());
     }
 }

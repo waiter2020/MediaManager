@@ -13,10 +13,10 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static java.nio.file.StandardWatchEventKinds.*;
 
@@ -30,8 +30,9 @@ public class DirectoryWatcherService {
     private final EventDebouncer debouncer;
     
     private WatchService watchService;
-    private final Map<WatchKey, Path> keys = new HashMap<>();
-    private final ExecutorService executorService = Executors.newSingleThreadExecutor();
+    private final Map<WatchKey, WatchRegistration> keys = new ConcurrentHashMap<>();
+    private final Map<Path, WatchKey> registeredDirs = new ConcurrentHashMap<>();
+    private final ExecutorService executorService = Executors.newFixedThreadPool(2);
 
     private volatile boolean running = false;
 
@@ -44,7 +45,8 @@ public class DirectoryWatcherService {
             // Register all active library paths
             libraryRepository.findAll().forEach(this::registerLibraryPaths);
             
-            // Start listening loop
+            // Start listening loop with 2 threads
+            executorService.submit(this::processEvents);
             executorService.submit(this::processEvents);
             log.info("DirectoryWatcherService initialized.");
         } catch (IOException e) {
@@ -69,6 +71,29 @@ public class DirectoryWatcherService {
         }
     }
 
+    public void refreshLibraryPaths(MediaLibrary library) {
+        if (library == null || library.getId() == null) {
+            return;
+        }
+        unregisterLibrary(library.getId());
+        registerLibraryPaths(library);
+    }
+
+    public void unregisterLibrary(Integer libraryId) {
+        if (libraryId == null) {
+            return;
+        }
+        keys.entrySet().removeIf(entry -> {
+            WatchRegistration registration = entry.getValue();
+            if (!libraryId.equals(registration.libraryId())) {
+                return false;
+            }
+            entry.getKey().cancel();
+            registeredDirs.remove(registration.dir());
+            return true;
+        });
+    }
+
     private void registerDirectoryAndSubDirectories(Path start, Integer libraryId) {
         if (!Files.exists(start) || !Files.isDirectory(start)) {
             log.warn("Cannot watch missing or non-directory path: {}", start);
@@ -87,9 +112,13 @@ public class DirectoryWatcherService {
 
     private void registerDirectory(Path dir, Integer libraryId) {
         try {
-            // Mapping libraryId to path could be useful later, for now we scan by library on event
+            Path normalized = dir.toAbsolutePath().normalize();
+            if (registeredDirs.containsKey(normalized)) {
+                return;
+            }
             WatchKey key = dir.register(watchService, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY);
-            keys.put(key, dir);
+            keys.put(key, new WatchRegistration(normalized, libraryId));
+            registeredDirs.put(normalized, key);
         } catch (IOException e) {
             log.error("Failed to register directory {}", dir, e);
         }
@@ -104,16 +133,25 @@ public class DirectoryWatcherService {
                 return;
             }
 
-            Path dir = keys.get(key);
-            if (dir == null) {
+            WatchRegistration registration = keys.get(key);
+            if (registration == null) {
                 log.warn("WatchKey not recognized!");
                 continue;
             }
+            Path dir = registration.dir();
 
             for (WatchEvent<?> event : key.pollEvents()) {
                 WatchEvent.Kind<?> kind = event.kind();
                 
-                if (kind == OVERFLOW) continue;
+                if (kind == OVERFLOW) {
+                    log.warn("WatchService overflow detected for directory: {}. Triggering full directory scan.", dir);
+                    String debounceKey = "scan_dir_" + dir.toString();
+                    debouncer.debounce(debounceKey, () -> {
+                        log.info("Debounced overflow scan triggered. Scanning directory: {}", dir);
+                        scanService.scanSpecificDirectoryAsync(dir.toString());
+                    }, 3000);
+                    continue;
+                }
 
                 WatchEvent<Path> ev = cast(event);
                 Path name = ev.context();
@@ -123,7 +161,7 @@ public class DirectoryWatcherService {
 
                 // If a new directory is created, register it
                 if (kind == ENTRY_CREATE && Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS)) {
-                    registerDirectoryAndSubDirectories(child, null);
+                    registerDirectoryAndSubDirectories(child, registration.libraryId());
                 }
                 
                 // Debounce the scan operation for the parent directory's library
@@ -132,8 +170,6 @@ public class DirectoryWatcherService {
                 String debounceKey = "scan_dir_" + dir.toString();
                 debouncer.debounce(debounceKey, () -> {
                     log.info("Debounced file event triggered. Scanning changed directory: {}", dir);
-                    // Locate library. We could map this better during registration, 
-                    // for now just trigger a fast custom scan
                     scanService.scanSpecificDirectoryAsync(dir.toString());
                 }, 3000); // 3-second debounce
             }
@@ -141,7 +177,10 @@ public class DirectoryWatcherService {
             // reset key and remove from set if directory no longer accessible
             boolean valid = key.reset();
             if (!valid) {
-                keys.remove(key);
+                WatchRegistration removed = keys.remove(key);
+                if (removed != null) {
+                    registeredDirs.remove(removed.dir());
+                }
                 if (keys.isEmpty()) {
                     log.info("All watch keys became invalid.");
                 }
@@ -153,4 +192,6 @@ public class DirectoryWatcherService {
     private static <T> WatchEvent<T> cast(WatchEvent<?> event) {
         return (WatchEvent<T>) event;
     }
+
+    private record WatchRegistration(Path dir, Integer libraryId) {}
 }

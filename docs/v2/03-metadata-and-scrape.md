@@ -102,3 +102,13 @@ stateDiagram-v2
 
 - 最大重试 3 次，指数退避。
 - 全局并发：`mediamanager.scraper.max-concurrent`（默认 2）。
+
+## 10. 管理端（2026-05 重审）
+
+| 页面 | 路径 | 说明 |
+|------|------|------|
+| 后台任务 | `/settings/tasks` | 区分扫描（EXTRACTOR）与刮削（SCRAPER）；`POST /scrape/start` 全库刮削 |
+| 刮削计划 | `/settings/scrape-schedules` | Cron/固定间隔；`scope=LIBRARY` 时校验库内已启用 SCRAPER |
+| 库详情 | `/libraries/{id}` | 手动刮削 / 扫描；插件摘要与 SCRAPER 警告 |
+
+创建 `scope=LIBRARY` 的刮削计划时，服务端拒绝未配置启用 SCRAPER 的媒体库（`40001`）。

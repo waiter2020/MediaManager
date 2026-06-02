@@ -2,12 +2,17 @@ package com.mediamanager.media.controller;
 
 import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.common.response.PageResult;
+import com.mediamanager.media.dto.ClassifyBatchRequest;
 import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.dto.MediaItemDetailResponse;
 import com.mediamanager.metadata.dto.IdentifyRequest;
+import com.mediamanager.metadata.dto.SeasonDto;
 import com.mediamanager.media.service.MediaItemService;
+import com.mediamanager.search.dto.SemanticSearchResult;
+import com.mediamanager.search.service.SearchService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +31,7 @@ import java.util.Set;
 public class MediaItemController {
 
     private final MediaItemService itemService;
+    private final SearchService searchService;
 
     @GetMapping
     @PreAuthorize("hasAuthority('media:view')")
@@ -36,12 +42,16 @@ public class MediaItemController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Set<Integer> categoryIds,
             @RequestParam(required = false) Set<Integer> tagIds,
+            @RequestParam(required = false) Integer minYear,
+            @RequestParam(required = false) Integer maxYear,
+            @RequestParam(required = false) Double minRating,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String sortField,
             @RequestParam(required = false) String sortOrder) {
         return ApiResponse.success(itemService.getItems(
-                libraryId, type, keyword, categoryIds, tagIds, page, size, sortField, sortOrder));
+                libraryId, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating,
+                page, size, sortField, sortOrder));
     }
 
     @GetMapping("/{id}")
@@ -56,6 +66,38 @@ public class MediaItemController {
     @Operation(summary = "Get detailed media item by ID")
     public ApiResponse<MediaItemDetailResponse> getItemDetail(@PathVariable Integer id) {
         return ApiResponse.success(itemService.getItemDetail(id));
+    }
+
+    @GetMapping("/{id}/seasons")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Get TV show seasons and episodes")
+    public ApiResponse<List<SeasonDto>> getItemSeasons(@PathVariable Integer id) {
+        return ApiResponse.success(itemService.getItemSeasons(id));
+    }
+
+    @PostMapping("/{id}/seasons/sync")
+    @PreAuthorize("hasAuthority('media:refresh')")
+    @Operation(summary = "Sync TV seasons and episodes from TMDb")
+    public ApiResponse<Map<String, Object>> syncTvSeasons(@PathVariable Integer id) {
+        return ApiResponse.success(itemService.syncTvSeasons(id));
+    }
+
+    @GetMapping("/{id}/similar")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Find semantically similar media items")
+    public ApiResponse<SemanticSearchResult> getSimilarItems(
+            @PathVariable Integer id,
+            @RequestParam(defaultValue = "12") int limit) {
+        SemanticSearchResult result = searchService.similarToItem(id, Math.min(Math.max(limit, 1), 50));
+        if (result.getHint() != null && !result.getHint().isBlank()) {
+            return ApiResponse.<SemanticSearchResult>builder()
+                    .code(200)
+                    .message(result.getHint())
+                    .data(result)
+                    .timestamp(java.time.Instant.now())
+                    .build();
+        }
+        return ApiResponse.success(result);
     }
 
     @GetMapping("/filters")
@@ -81,6 +123,21 @@ public class MediaItemController {
         return ApiResponse.success();
     }
 
+    @PostMapping("/{id}/classify")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Re-run classification for media item")
+    public ApiResponse<Void> classifyItem(@PathVariable Integer id) {
+        itemService.classifyItem(id);
+        return ApiResponse.success();
+    }
+
+    @PostMapping("/classify-batch")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Re-run classification for multiple items (max 100)")
+    public ApiResponse<Map<String, Object>> classifyBatch(@Valid @RequestBody ClassifyBatchRequest request) {
+        return ApiResponse.success(itemService.classifyBatch(request.getItemIds()));
+    }
+
     @PostMapping("/{id}/identify")
     @PreAuthorize("hasAuthority('media:edit_metadata')")
     @Operation(summary = "Manually identify item with external provider")
@@ -97,6 +154,24 @@ public class MediaItemController {
             @PathVariable Integer id,
             @RequestParam String q) {
         return ApiResponse.success(itemService.searchTmdbCandidates(id, q));
+    }
+
+    @GetMapping("/{id}/javbus/search")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Search JavBus candidates for manual match")
+    public ApiResponse<List<Map<String, Object>>> searchJavBus(
+            @PathVariable Integer id,
+            @RequestParam String q) {
+        return ApiResponse.success(itemService.searchJavBusCandidates(id, q));
+    }
+
+    @GetMapping("/{id}/stashdb/search")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Search StashDB candidates for manual match")
+    public ApiResponse<List<Map<String, Object>>> searchStashDb(
+            @PathVariable Integer id,
+            @RequestParam String q) {
+        return ApiResponse.success(itemService.searchStashDbCandidates(id, q));
     }
 
     @DeleteMapping("/{id}")
@@ -127,5 +202,12 @@ public class MediaItemController {
     @Operation(summary = "Get backdrop image")
     public ResponseEntity<Resource> getBackdrop(@PathVariable Integer id) throws IOException {
         return itemService.getImage(id, "backdrop");
+    }
+
+    @GetMapping("/{id}/preview")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Get animated WebP preview image")
+    public ResponseEntity<Resource> getPreview(@PathVariable Integer id) throws IOException {
+        return itemService.getPreviewImage(id);
     }
 }

@@ -18,12 +18,20 @@ import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.repository.MediaItemSpecification;
 import com.mediamanager.metadata.dto.MovieMetadataDto;
+import com.mediamanager.metadata.dto.TvShowMetadataDto;
+import com.mediamanager.metadata.dto.SeasonDto;
+import com.mediamanager.metadata.dto.EpisodeDto;
 import com.mediamanager.metadata.dto.ImageMetadataDto;
 import com.mediamanager.metadata.dto.AudioMetadataDto;
 import com.mediamanager.metadata.entity.MovieMetadata;
+import com.mediamanager.metadata.entity.TvShowMetadata;
+import com.mediamanager.metadata.entity.Season;
+import com.mediamanager.metadata.entity.Episode;
 import com.mediamanager.metadata.entity.ImageMetadata;
 import com.mediamanager.metadata.entity.AudioMetadata;
 import com.mediamanager.metadata.repository.MovieMetadataRepository;
+import com.mediamanager.metadata.repository.TvShowMetadataRepository;
+import com.mediamanager.metadata.repository.SeasonRepository;
 import com.mediamanager.metadata.repository.ImageMetadataRepository;
 import com.mediamanager.metadata.repository.AudioMetadataRepository;
 import com.mediamanager.classification.entity.Tag;
@@ -31,33 +39,45 @@ import com.mediamanager.classification.entity.Category;
 import com.mediamanager.metadata.service.MetadataPipelineService;
 import com.mediamanager.metadata.service.MetadataApplyService;
 import com.mediamanager.metadata.service.TmdbClientService;
+import com.mediamanager.metadata.spi.MetadataScraper;
+import com.mediamanager.plugin.PluginRegistry;
+import com.mediamanager.plugin.PluginKind;
+import com.mediamanager.plugin.entity.LibraryPluginConfig;
+import com.mediamanager.library.repository.MediaLibraryRepository;
+import com.mediamanager.metadata.service.TvSeasonSyncService;
+import com.mediamanager.metadata.service.NfoExportService;
+import com.mediamanager.plugin.service.LibraryPluginConfigResolver;
 import com.mediamanager.metadata.dto.IdentifyRequest;
 import com.mediamanager.metadata.spi.MetadataResult;
 import com.mediamanager.metadata.util.FileNameParser;
-import com.mediamanager.search.service.FtsIndexService;
+import com.mediamanager.classification.service.ClassificationEngine;
 import com.mediamanager.system.service.LibraryAccessService;
+import com.mediamanager.common.service.StoragePathMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MediaItemService {
@@ -69,6 +89,8 @@ public class MediaItemService {
     private final MetadataPipelineService metadataPipelineService;
     private final ThumbnailService thumbnailService;
     private final MovieMetadataRepository movieMetadataRepository;
+    private final TvShowMetadataRepository tvShowMetadataRepository;
+    private final SeasonRepository seasonRepository;
     private final ImageMetadataRepository imageMetadataRepository;
     private final AudioMetadataRepository audioMetadataRepository;
     private final ObjectMapper objectMapper;
@@ -76,8 +98,15 @@ public class MediaItemService {
     private final TmdbClientService tmdbClientService;
     private final MetadataApplyService metadataApplyService;
     private final MediaPostProcessService mediaPostProcessService;
-    private final FtsIndexService ftsIndexService;
+    private final ClassificationEngine classificationEngine;
     private final FileNameParser fileNameParser;
+    private final PluginRegistry pluginRegistry;
+    private final MediaLibraryRepository libraryRepository;
+    private final LibraryPluginConfigResolver pluginConfigResolver;
+    private final TvSeasonSyncService tvSeasonSyncService;
+    private final NfoExportService nfoExportService;
+    private final StoragePathMapper storagePathMapper;
+    private final MediaFileLifecycleService mediaFileLifecycleService;
 
     @Transactional(readOnly = true)
     public PageResult<MediaItemResponse> getItems(
@@ -86,6 +115,9 @@ public class MediaItemService {
             String keyword,
             Set<Integer> categoryIds,
             Set<Integer> tagIds,
+            Integer minYear,
+            Integer maxYear,
+            Double minRating,
             int page,
             int size,
             String sortField,
@@ -94,7 +126,8 @@ public class MediaItemService {
         PageRequest pageRequest = PageRequest.of(page - 1, size, resolveSort(sortField, sortOrder));
         
         Set<Integer> libraryIds = libraryAccessService.resolveLibraryFilter(libraryId);
-        Specification<MediaItem> spec = MediaItemSpecification.filterBy(libraryIds, type, keyword, categoryIds, tagIds);
+        Specification<MediaItem> spec = MediaItemSpecification.filterBy(
+                libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating);
         
         Page<MediaItem> itemPage = itemRepository.findAll(spec, pageRequest);
         
@@ -120,12 +153,18 @@ public class MediaItemService {
                 .collect(Collectors.toList());
 
         MovieMetadataDto movieMetadataDto = null;
+        TvShowMetadataDto tvShowMetadataDto = null;
         ImageMetadataDto imageMetadataDto = null;
         AudioMetadataDto audioMetadataDto = null;
 
-        if ("MOVIE".equals(item.getType()) || "TV_SHOW".equals(item.getType())) {
+        if ("MOVIE".equals(item.getType())) {
             movieMetadataDto = movieMetadataRepository.findByMediaItemId(item.getId())
                     .map(this::toMovieMetadataDto)
+                    .orElse(null);
+        }
+        if ("TV_SHOW".equals(item.getType())) {
+            tvShowMetadataDto = tvShowMetadataRepository.findByMediaItemId(item.getId())
+                    .map(this::toTvShowMetadataDto)
                     .orElse(null);
         }
         if ("IMAGE".equals(item.getType())) {
@@ -166,9 +205,51 @@ public class MediaItemService {
                 .tags(tags)
                 .categories(categories)
                 .movieMetadata(movieMetadataDto)
+                .tvShowMetadata(tvShowMetadataDto)
                 .imageMetadata(imageMetadataDto)
                 .audioMetadata(audioMetadataDto)
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SeasonDto> getItemSeasons(Integer id) {
+        MediaItem item = requireVisibleItem(id);
+        if (!"TV_SHOW".equals(item.getType())) {
+            return List.of();
+        }
+        return seasonRepository.findByTvShowMetadata_MediaItem_IdOrderBySeasonNumberAsc(item.getId()).stream()
+                .map(this::toSeasonDto)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public Map<String, Object> syncTvSeasons(Integer id) {
+        MediaItem item = requireVisibleItem(id);
+        if (!"TV_SHOW".equals(item.getType())) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "Only TV_SHOW items support season sync");
+        }
+        String tmdbId = resolveTmdbProviderId(item);
+        if (tmdbId == null || tmdbId.isBlank()) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER,
+                    "No TMDb ID on item; use manual identify with TMDb first");
+        }
+        var library = libraryRepository.findWithDetailsById(item.getLibrary().getId()).orElse(item.getLibrary());
+        String apiKey = tmdbClientService.resolveApiKeyForLibrary(library);
+        tvSeasonSyncService.syncFromTmdb(item, apiKey, tmdbId, library.getLanguage());
+        int seasonCount = seasonRepository.findByTvShowMetadata_MediaItem_IdOrderBySeasonNumberAsc(item.getId()).size();
+        return Map.of("seasonCount", seasonCount, "tmdbId", tmdbId);
+    }
+
+    private String resolveTmdbProviderId(MediaItem item) {
+        if (item.getProviderIds() == null || item.getProviderIds().isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, String> map = objectMapper.readValue(item.getProviderIds(), new TypeReference<>() {});
+            return map != null ? map.get("tmdb") : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public MediaItemResponse toResponsePublic(MediaItem item) {
@@ -221,6 +302,46 @@ public class MediaItemService {
                 .certification(metadata.getCertification())
                 .genres(readStringList(metadata.getGenres()))
                 .studios(readStringList(metadata.getStudios()))
+                .build();
+    }
+
+    private TvShowMetadataDto toTvShowMetadataDto(TvShowMetadata metadata) {
+        return TvShowMetadataDto.builder()
+                .status(metadata.getStatus())
+                .network(metadata.getNetwork())
+                .genres(readStringList(metadata.getGenres()))
+                .build();
+    }
+
+    private SeasonDto toSeasonDto(Season season) {
+        List<EpisodeDto> episodes = season.getEpisodes() == null ? List.of()
+                : season.getEpisodes().stream().map(this::toEpisodeDto).collect(Collectors.toList());
+        return SeasonDto.builder()
+                .id(season.getId())
+                .seasonNumber(season.getSeasonNumber())
+                .name(season.getName())
+                .overview(season.getOverview())
+                .posterPath(season.getPosterPath())
+                .episodes(episodes)
+                .build();
+    }
+
+    private EpisodeDto toEpisodeDto(Episode episode) {
+        Integer mediaFileId = episode.getMediaFile() != null ? episode.getMediaFile().getId() : null;
+        Integer mediaItemId = episode.getMediaFile() != null && episode.getMediaFile().getMediaItem() != null
+                ? episode.getMediaFile().getMediaItem().getId()
+                : null;
+        Float rating = episode.getRating() != null ? episode.getRating().floatValue() : null;
+        return EpisodeDto.builder()
+                .id(episode.getId())
+                .episodeNumber(episode.getEpisodeNumber())
+                .title(episode.getTitle())
+                .overview(episode.getOverview())
+                .airDate(episode.getAirDate())
+                .runtimeMinutes(episode.getRuntimeMinutes())
+                .rating(rating)
+                .mediaFileId(mediaFileId)
+                .mediaItemId(mediaItemId)
                 .build();
     }
 
@@ -298,7 +419,7 @@ public class MediaItemService {
     public MediaItemResponse updateMetadata(Integer id, Map<String, Object> metadata) {
         MediaItem item = itemRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
+        libraryAccessService.assertCanEditItem(item);
 
         if (metadata.containsKey("title")) item.setTitle((String) metadata.get("title"));
         if (metadata.containsKey("originalTitle")) item.setOriginalTitle((String) metadata.get("originalTitle"));
@@ -308,14 +429,69 @@ public class MediaItemService {
             if (val instanceof Number) item.setRating(BigDecimal.valueOf(((Number) val).doubleValue()));
         }
 
-        return toResponse(itemRepository.save(item));
+        if ("TV_SHOW".equals(item.getType())) {
+            TvShowMetadata tm = tvShowMetadataRepository.findByMediaItemId(item.getId())
+                    .orElse(TvShowMetadata.builder().mediaItem(item).build());
+            if (metadata.containsKey("network")) {
+                tm.setNetwork((String) metadata.get("network"));
+            }
+            if (metadata.containsKey("tvStatus")) {
+                tm.setStatus((String) metadata.get("tvStatus"));
+            }
+            if (metadata.containsKey("genres")) {
+                Object genres = metadata.get("genres");
+                if (genres instanceof List<?> list) {
+                    try {
+                        tm.setGenres(objectMapper.writeValueAsString(list));
+                    } catch (Exception ignored) {
+                        // keep existing
+                    }
+                } else if (genres instanceof String s) {
+                    tm.setGenres(s);
+                }
+            }
+            tvShowMetadataRepository.save(tm);
+        }
+
+        MediaItem saved = itemRepository.save(item);
+        nfoExportService.export(saved);
+        mediaPostProcessService.afterMetadataUpdatedAsync(saved.getId());
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public void classifyItem(Integer id) {
+        MediaItem item = requireVisibleItem(id);
+        libraryAccessService.assertCanEditItem(item);
+        classificationEngine.executeClassification(item);
+    }
+
+    public Map<String, Object> classifyBatch(List<Integer> itemIds) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "itemIds 不能为空");
+        }
+        if (itemIds.size() > 100) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "单次最多分类 100 条");
+        }
+        int ok = 0;
+        int failed = 0;
+        for (Integer id : itemIds) {
+            try {
+                classifyItem(id);
+                ok++;
+            } catch (Exception e) {
+                failed++;
+                log.warn("Batch classify failed for item {}: {}", id, e.getMessage());
+            }
+        }
+        return Map.of("requested", itemIds.size(), "succeeded", ok, "failed", failed);
     }
 
     @Transactional
     public void refreshMetadata(Integer id) {
         MediaItem item = itemRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
+        libraryAccessService.assertCanEditItem(item);
         List<MediaFile> files = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
         MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
         MetadataResult result = metadataPipelineService.executeLocalPipeline(item, primaryFile);
@@ -323,6 +499,7 @@ public class MediaItemService {
             result.mergeFrom(fileNameParser.parse(primaryFile.getFileName()));
         }
         metadataApplyService.applyResult(item, result, primaryFile);
+        nfoExportService.export(item);
         mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
     }
 
@@ -330,71 +507,102 @@ public class MediaItemService {
     public void deleteItem(Integer id) {
         MediaItem item = itemRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
-        for (MediaFile file : fileRepository.findByMediaItemId(item.getId())) {
-            if (!Boolean.TRUE.equals(file.getDeleted())) {
-                file.setDeleted(true);
-                file.setDeletedAt(Instant.now());
-                fileRepository.save(file);
-            }
-        }
-        syncItemVisibility(item);
+        libraryAccessService.assertCanDeleteItem(item);
+        mediaFileLifecycleService.softDeleteActiveFiles(item);
     }
 
     @Transactional
     public void deleteSourceFile(Integer id) {
         MediaItem item = itemRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
-        List<MediaFile> files = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
-        for (MediaFile file : files) {
-            try {
-                Files.deleteIfExists(Path.of(file.getFilePath()));
-            } catch (IOException e) {
-                throw new BusinessException(ErrorCode.FILE_SYSTEM_ERROR, "Failed to delete: " + file.getFilePath());
-            }
-            file.setDeleted(true);
-            file.setDeletedAt(Instant.now());
-            fileRepository.save(file);
-        }
-        syncItemVisibility(item);
+        libraryAccessService.assertCanDeleteItem(item);
+        mediaFileLifecycleService.deleteSourceFiles(item);
     }
 
     @Transactional
     public MediaItemResponse identifyItem(Integer id, IdentifyRequest request) {
         MediaItem item = itemRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
+        libraryAccessService.assertCanEditItem(item);
 
-        String provider = request.getProvider() != null ? request.getProvider() : "tmdb";
-        if (!"tmdb".equalsIgnoreCase(provider)) {
-            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "Unsupported provider: " + provider);
-        }
+        String provider = request.getProvider() != null ? request.getProvider().toLowerCase() : "tmdb";
         if (request.getExternalId() == null || request.getExternalId().isBlank()) {
             throw new BusinessException(ErrorCode.INVALID_PARAMETER, "externalId is required");
         }
 
-        String apiKey = tmdbClientService.resolveApiKeyForLibrary(item.getLibrary());
-        MetadataResult result = tmdbClientService.fetchByExternalId(
-                apiKey,
-                item.getType(),
-                item.getLibrary().getLanguage(),
-                request.getExternalId());
+        var library = libraryRepository.findWithDetailsById(item.getLibrary().getId())
+                .orElse(item.getLibrary());
+
+        String configJson = extractorConfigJson(library, provider.toUpperCase());
+        LibraryPluginConfig pluginConfig = LibraryPluginConfig.builder()
+                .library(library)
+                .pluginId(provider)
+                .kind(PluginKind.SCRAPER.name())
+                .enabled(true)
+                .priority(100)
+                .config(configJson)
+                .build();
+
+        MetadataScraper scraper = (MetadataScraper) pluginRegistry.find(PluginKind.SCRAPER, provider)
+                .map(PluginRegistry.RegisteredPlugin::delegate)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_PARAMETER, "Unsupported provider: " + provider));
+
+        MetadataResult result = scraper.fetchByExternalId(request.getExternalId(), pluginConfig, item.getType(), library.getLanguage());
+
+        if (result == null) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "No metadata returned for provider: " + provider);
+        }
 
         List<MediaFile> files = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
         MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
         metadataApplyService.applyResult(item, result, primaryFile);
+        nfoExportService.export(item);
+        if ("tmdb".equals(provider) && "TV_SHOW".equals(item.getType())) {
+            String apiKey = tmdbClientService.resolveApiKeyForLibrary(library);
+            tvSeasonSyncService.syncFromTmdb(item, apiKey, request.getExternalId(), library.getLanguage());
+        }
         mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
         return toResponse(itemRepository.findById(id).orElseThrow());
     }
 
+    private String extractorConfigJson(com.mediamanager.library.entity.MediaLibrary library, String type) {
+        return pluginConfigResolver.resolveConfigJson(library, type);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> searchScraperCandidates(Integer id, String provider, String query) {
+        MediaItem item = requireVisibleItem(id);
+        var library = libraryRepository.findWithDetailsById(item.getLibrary().getId()).orElse(item.getLibrary());
+        String configJson = extractorConfigJson(library, provider.toUpperCase());
+        LibraryPluginConfig pluginConfig = LibraryPluginConfig.builder()
+                .library(library)
+                .pluginId(provider)
+                .kind(PluginKind.SCRAPER.name())
+                .enabled(true)
+                .priority(100)
+                .config(configJson)
+                .build();
+
+        MetadataScraper scraper = (MetadataScraper) pluginRegistry.find(PluginKind.SCRAPER, provider)
+                .map(PluginRegistry.RegisteredPlugin::delegate)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_PARAMETER, "Unsupported provider: " + provider));
+
+        return scraper.searchCandidates(query, pluginConfig, item.getType(), library.getLanguage());
+    }
+
     @Transactional(readOnly = true)
     public List<Map<String, Object>> searchTmdbCandidates(Integer id, String query) {
-        MediaItem item = itemRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(item);
-        String apiKey = tmdbClientService.resolveApiKeyForLibrary(item.getLibrary());
-        return tmdbClientService.search(apiKey, item.getType(), item.getLibrary().getLanguage(), query);
+        return searchScraperCandidates(id, "tmdb", query);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> searchJavBusCandidates(Integer id, String query) {
+        return searchScraperCandidates(id, "javbus", query);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> searchStashDbCandidates(Integer id, String query) {
+        return searchScraperCandidates(id, "stashdb", query);
     }
 
     public ResponseEntity<Resource> getImage(Integer id, String type) throws IOException {
@@ -407,7 +615,13 @@ public class MediaItemService {
             return ResponseEntity.notFound().build();
         }
 
-        Path path = Path.of(imagePath);
+        String trimmed = imagePath.trim();
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(trimmed)).build();
+        }
+
+        String resolvedPath = storagePathMapper.mapPathIfNeeded(trimmed);
+        Path path = Path.of(resolvedPath);
         if (!Files.exists(path)) {
             return ResponseEntity.notFound().build();
         }
@@ -418,6 +632,24 @@ public class MediaItemService {
 
         return ResponseEntity.ok()
                 .header("Content-Type", contentType)
+                .body(resource);
+    }
+
+    public ResponseEntity<Resource> getPreviewImage(Integer id) throws IOException {
+        MediaItem item = itemRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
+        libraryAccessService.assertCanViewItem(item);
+
+        String previewPath = thumbnailService.getPreviewWebpPath(id);
+        Path path = Path.of(previewPath);
+        if (!Files.exists(path)) {
+            // Fallback to static poster
+            return getImage(id, "poster");
+        }
+
+        Resource resource = new FileSystemResource(path);
+        return ResponseEntity.ok()
+                .header("Content-Type", "image/webp")
                 .body(resource);
     }
 
@@ -439,19 +671,19 @@ public class MediaItemService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
         libraryAccessService.assertCanViewItem(item);
         if (Boolean.TRUE.equals(item.getHidden())) {
-            throw new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND);
+            return resolveVisibleReplacement(item)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
         }
         return item;
     }
 
-    private void syncItemVisibility(MediaItem item) {
-        boolean hasActive = !fileRepository.findByMediaItemIdAndDeletedFalse(item.getId()).isEmpty();
-        item.setHidden(!hasActive);
-        itemRepository.save(item);
-        if (Boolean.TRUE.equals(item.getHidden())) {
-            ftsIndexService.removeItem(item.getId());
-        } else {
-            ftsIndexService.indexItem(item);
+    private java.util.Optional<MediaItem> resolveVisibleReplacement(MediaItem hidden) {
+        if (hidden.getTitle() == null || hidden.getTitle().isBlank()) {
+            return java.util.Optional.empty();
         }
+        var replacements = itemRepository.findVisibleReplacementsByTitle(
+                hidden.getLibrary().getId(), hidden.getTitle());
+        return replacements.stream().findFirst();
     }
+
 }

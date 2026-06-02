@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.time.LocalDate;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +32,14 @@ public class MetadataResult {
     // Movie/Episode Specific
     private Integer runtimeMinutes;
     private String certification;
+
+    // Technical media fields
+    private Integer width;
+    private Integer height;
+    private Integer durationSeconds;
+    private Integer bitrate;
+    private Integer sampleRate;
+    private Integer channels;
     
     // Audio Specific
     private String artist;
@@ -38,6 +47,18 @@ public class MetadataResult {
     private String albumArtist;
     private Integer trackNumber;
     private Integer discNumber;
+
+    // Image Specific
+    private String cameraMake;
+    private String cameraModel;
+    private String lens;
+    private String iso;
+    private String aperture;
+    private String shutterSpeed;
+    private Instant takenAt;
+    private Double gpsLatitude;
+    private Double gpsLongitude;
+    private String exifData;
 
     // Collections
     private List<String> genres;
@@ -68,11 +89,27 @@ public class MetadataResult {
         if (this.episodeNumber == null && other.episodeNumber != null) this.episodeNumber = other.episodeNumber;
         if (this.runtimeMinutes == null && other.runtimeMinutes != null) this.runtimeMinutes = other.runtimeMinutes;
         if (this.certification == null && other.certification != null) this.certification = other.certification;
+        if (this.width == null && other.width != null) this.width = other.width;
+        if (this.height == null && other.height != null) this.height = other.height;
+        if (this.durationSeconds == null && other.durationSeconds != null) this.durationSeconds = other.durationSeconds;
+        if (this.bitrate == null && other.bitrate != null) this.bitrate = other.bitrate;
+        if (this.sampleRate == null && other.sampleRate != null) this.sampleRate = other.sampleRate;
+        if (this.channels == null && other.channels != null) this.channels = other.channels;
         if (this.artist == null && other.artist != null) this.artist = other.artist;
         if (this.album == null && other.album != null) this.album = other.album;
         if (this.albumArtist == null && other.albumArtist != null) this.albumArtist = other.albumArtist;
         if (this.trackNumber == null && other.trackNumber != null) this.trackNumber = other.trackNumber;
         if (this.discNumber == null && other.discNumber != null) this.discNumber = other.discNumber;
+        if (this.cameraMake == null && other.cameraMake != null) this.cameraMake = other.cameraMake;
+        if (this.cameraModel == null && other.cameraModel != null) this.cameraModel = other.cameraModel;
+        if (this.lens == null && other.lens != null) this.lens = other.lens;
+        if (this.iso == null && other.iso != null) this.iso = other.iso;
+        if (this.aperture == null && other.aperture != null) this.aperture = other.aperture;
+        if (this.shutterSpeed == null && other.shutterSpeed != null) this.shutterSpeed = other.shutterSpeed;
+        if (this.takenAt == null && other.takenAt != null) this.takenAt = other.takenAt;
+        if (this.gpsLatitude == null && other.gpsLatitude != null) this.gpsLatitude = other.gpsLatitude;
+        if (this.gpsLongitude == null && other.gpsLongitude != null) this.gpsLongitude = other.gpsLongitude;
+        if (this.exifData == null && other.exifData != null) this.exifData = other.exifData;
         if ((this.genres == null || this.genres.isEmpty()) && other.genres != null && !other.genres.isEmpty()) {
             this.genres = other.genres;
         }

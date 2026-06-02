@@ -2,9 +2,13 @@ package com.mediamanager.common.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mediamanager.common.response.ApiResponse;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletResponse;
+import com.mediamanager.system.service.SysConfigService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import java.util.Arrays;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -34,9 +38,19 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
+    private final SysConfigService sysConfigService;
 
     @Value("${mediamanager.auth.enabled:true}")
-    private boolean authEnabled;
+    private boolean yamlAuthEnabled;
+
+    @Value("${mediamanager.cors.allowed-origin-patterns:http://localhost:*}")
+    private String corsAllowedOriginPatterns;
+
+    @PostConstruct
+    void enableInheritedSecurityContext() {
+        // Virtual threads + SSE async dispatch need inherited SecurityContext
+        SecurityContextHolder.setStrategyName(SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
+    }
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -59,11 +73,12 @@ public class SecurityConfig {
                         })
                 );
 
+        boolean authEnabled = sysConfigService.isAuthEnabled(yamlAuthEnabled);
+        sysConfigService.captureEffectiveAuthEnabled(authEnabled);
         if (authEnabled) {
             http.authorizeHttpRequests(auth -> auth
                     .requestMatchers("/api/v1/auth/**").permitAll()
                     .requestMatchers("/api/v1/system/status").permitAll()
-                    .requestMatchers("/api/v1/sse/**").permitAll()
                     .requestMatchers("/swagger-ui/**", "/api-docs/**", "/swagger-ui.html").permitAll()
                     .requestMatchers(HttpMethod.GET, "/", "/index.html", "/assets/**",
                             "/favicon.ico", "/*.js", "/*.css", "/*.png", "/*.svg").permitAll()
@@ -91,7 +106,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
+        config.setAllowedOriginPatterns(Arrays.asList(corsAllowedOriginPatterns.split(",")));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

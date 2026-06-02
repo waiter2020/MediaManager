@@ -1,8 +1,30 @@
 package com.mediamanager.classification.spi;
 
 import com.mediamanager.media.entity.MediaItem;
+import com.mediamanager.plugin.MediaManagerPlugin;
+import com.mediamanager.plugin.PluginKind;
 
-public interface ClassifierStrategy {
+public interface ClassifierStrategy extends MediaManagerPlugin {
+
+    @Override
+    default PluginKind kind() {
+        return PluginKind.CLASSIFIER;
+    }
+
+    @Override
+    default String id() {
+        return getClass().getSimpleName().replace("Classifier", "").toLowerCase();
+    }
+
+    @Override
+    default String displayName() {
+        return getClass().getSimpleName();
+    }
+
+    @Override
+    default int defaultPriority() {
+        return getPriority();
+    }
 
     /**
      * Executes classification rules on a given MediaItem.

@@ -2,6 +2,7 @@ package com.mediamanager.sync.util;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import jakarta.annotation.PreDestroy;
 
 import java.util.Map;
 import java.util.concurrent.*;
@@ -41,4 +42,19 @@ public class EventDebouncer {
 
         delayedTasks.put(key, newTask);
     }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("Shutting down EventDebouncer scheduler...");
+        scheduler.shutdown();
+        try {
+            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            scheduler.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
 }
+

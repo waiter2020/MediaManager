@@ -45,6 +45,13 @@ public class SseService {
         return emitter;
     }
 
+    public void broadcastBoth(String legacyEvent, String contractEvent, Object payload) {
+        broadcast(legacyEvent, payload);
+        if (!legacyEvent.equals(contractEvent)) {
+            broadcast(contractEvent, payload);
+        }
+    }
+
     public void broadcast(String eventName, Object payload) {
         log.debug("Broadcasting SSE Event: {}", eventName);
         emitters.forEach((clientId, emitter) -> {

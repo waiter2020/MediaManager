@@ -20,4 +20,6 @@ public class MediaItemResponse {
     private String overview;
     private String posterPath;
     private List<Integer> fileIds;
+    /** Seconds from start when returned from playback history (continue watching). */
+    private Integer playbackPosition;
 }

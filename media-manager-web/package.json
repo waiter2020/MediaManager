@@ -7,7 +7,10 @@
     "build": "max build",
     "postinstall": "max setup",
     "setup": "max setup",
-    "start": "npm run dev"
+    "start": "npm run dev",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "@ant-design/icons": "^5.3.6",
@@ -20,6 +23,7 @@
     "xgplayer-hls": "^3.0.20"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "typescript": "^5.4.3"

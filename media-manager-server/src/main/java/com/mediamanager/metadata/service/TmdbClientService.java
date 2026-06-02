@@ -1,11 +1,17 @@
 package com.mediamanager.metadata.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.metadata.spi.MetadataResult;
+import com.mediamanager.plugin.service.LibraryPluginConfigResolver;
+import com.mediamanager.system.service.SysConfigService;
+import com.mediamanager.common.service.RateLimiterService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,76 +31,98 @@ public class TmdbClientService {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final SysConfigService sysConfigService;
+    private final LibraryPluginConfigResolver pluginConfigResolver;
+    private final RateLimiterService rateLimiterService;
 
     private static final String TMDB_BASE_URL = "https://api.themoviedb.org/3";
     private static final String IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500";
 
     public String resolveApiKeyForLibrary(MediaLibrary library) {
-        if (library.getExtractorConfigs() == null) {
-            throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb API key not configured for library");
+        String pluginConfig = pluginConfigResolver.resolveConfigJson(library, "TMDB");
+        if (pluginConfig != null) {
+            String fromPlugin = extractApiKey(pluginConfig);
+            if (fromPlugin != null && !fromPlugin.isBlank()) {
+                return fromPlugin;
+            }
         }
-        return library.getExtractorConfigs().stream()
-                .filter(c -> "TMDB".equalsIgnoreCase(c.getExtractorType()) && Boolean.TRUE.equals(c.getEnabled()))
-                .map(c -> extractApiKey(c.getConfig()))
-                .filter(k -> k != null && !k.isBlank())
-                .findFirst()
-                .orElseThrow(() -> new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb API key not configured for library"));
+        if (library.getExtractorConfigs() != null) {
+            String fromLibrary = library.getExtractorConfigs().stream()
+                    .filter(c -> "TMDB".equalsIgnoreCase(c.getExtractorType()) && Boolean.TRUE.equals(c.getEnabled()))
+                    .map(c -> extractApiKey(c.getConfig()))
+                    .filter(k -> k != null && !k.isBlank())
+                    .findFirst()
+                    .orElse(null);
+            if (fromLibrary != null) {
+                return fromLibrary;
+            }
+        }
+        String global = sysConfigService.tmdbApiKey();
+        if (global != null && !global.isBlank()) {
+            return global;
+        }
+        throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb API key not configured for library or system");
     }
 
     public List<Map<String, Object>> search(String apiKey, String mediaType, String language, String query) {
         if (query == null || query.isBlank()) {
             return List.of();
         }
-        String searchType = "TV_SHOW".equals(mediaType) ? "tv" : "movie";
-        try {
-            String searchUrl = UriComponentsBuilder.fromHttpUrl(TMDB_BASE_URL)
-                    .path("/search/" + searchType)
-                    .queryParam("api_key", apiKey)
-                    .queryParam("query", query)
-                    .queryParam("language", language != null ? language : "zh-CN")
-                    .build()
-                    .toUriString();
-            String response = restTemplate.getForObject(searchUrl, String.class);
-            JsonNode root = objectMapper.readTree(response);
-            List<Map<String, Object>> results = new ArrayList<>();
-            for (JsonNode node : root.path("results")) {
-                if (results.size() >= 12) {
-                    break;
+        return rateLimiterService.executeWithRateLimit("tmdb", 3, () -> {
+            String searchType = "TV_SHOW".equals(mediaType) ? "tv" : "movie";
+            try {
+                String searchUrl = UriComponentsBuilder.fromHttpUrl(TMDB_BASE_URL)
+                        .path("/search/" + searchType)
+                        .queryParam("api_key", apiKey)
+                        .queryParam("query", query)
+                        .queryParam("language", language != null ? language : "zh-CN")
+                        .build()
+                        .toUriString();
+                String response = restTemplate.getForObject(searchUrl, String.class);
+                JsonNode root = objectMapper.readTree(response);
+                List<Map<String, Object>> results = new ArrayList<>();
+                for (JsonNode node : root.path("results")) {
+                    if (results.size() >= 12) {
+                        break;
+                    }
+                    Map<String, Object> row = new HashMap<>();
+                    row.put("id", node.path("id").asText());
+                    row.put("title", node.path(searchType.equals("movie") ? "title" : "name").asText(null));
+                    row.put("overview", node.path("overview").asText(null));
+                    row.put("releaseDate", node.path(searchType.equals("movie") ? "release_date" : "first_air_date").asText(null));
+                    row.put("posterUrl", node.has("poster_path") && !node.path("poster_path").isNull()
+                            ? IMAGE_BASE_URL + node.path("poster_path").asText()
+                            : null);
+                    results.add(row);
                 }
-                Map<String, Object> row = new HashMap<>();
-                row.put("id", node.path("id").asText());
-                row.put("title", node.path(searchType.equals("movie") ? "title" : "name").asText(null));
-                row.put("overview", node.path("overview").asText(null));
-                row.put("releaseDate", node.path(searchType.equals("movie") ? "release_date" : "first_air_date").asText(null));
-                row.put("posterUrl", node.has("poster_path") && !node.path("poster_path").isNull()
-                        ? IMAGE_BASE_URL + node.path("poster_path").asText()
-                        : null);
-                results.add(row);
+                return results;
+            } catch (Exception e) {
+                log.error("TMDb search failed for {}", query, e);
+                throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb search failed: " + e.getMessage());
             }
-            return results;
-        } catch (Exception e) {
-            log.error("TMDb search failed for {}", query, e);
-            throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb search failed: " + e.getMessage());
-        }
+        });
     }
 
     public MetadataResult fetchByExternalId(String apiKey, String mediaType, String language, String externalId) {
-        String searchType = "TV_SHOW".equals(mediaType) ? "tv" : "movie";
-        try {
-            String detailUrl = UriComponentsBuilder.fromHttpUrl(TMDB_BASE_URL)
-                    .path("/" + searchType + "/" + externalId)
-                    .queryParam("api_key", apiKey)
-                    .queryParam("language", language != null ? language : "zh-CN")
-                    .build()
-                    .toUriString();
+        return rateLimiterService.executeWithRateLimit("tmdb", 3, () -> {
+            String searchType = "TV_SHOW".equals(mediaType) ? "tv" : "movie";
+            try {
+                String detailUrl = UriComponentsBuilder.fromHttpUrl(TMDB_BASE_URL)
+                        .path("/" + searchType + "/" + externalId)
+                        .queryParam("api_key", apiKey)
+                        .queryParam("language", language != null ? language : "zh-CN")
+                        .queryParam("append_to_response", "credits")
+                        .build()
+                        .toUriString();
 
-            String detailResponse = restTemplate.getForObject(detailUrl, String.class);
-            JsonNode detailNode = objectMapper.readTree(detailResponse);
-            return mapDetailNode(detailNode, searchType, externalId);
-        } catch (Exception e) {
-            log.error("TMDb fetch failed for id {}", externalId, e);
-            throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb fetch failed: " + e.getMessage());
-        }
+                String detailResponse = restTemplate.getForObject(detailUrl, String.class);
+                JsonNode detailNode = objectMapper.readTree(detailResponse);
+                return mapDetailNode(detailNode, searchType, externalId);
+            } catch (Exception e) {
+                log.error("TMDb fetch failed for id {}", externalId, e);
+                throw new BusinessException(ErrorCode.METADATA_EXTRACT_ERROR, "TMDb fetch failed: " + e.getMessage());
+            }
+        });
     }
 
     private MetadataResult mapDetailNode(JsonNode detailNode, String searchType, String externalId) {
@@ -127,6 +155,51 @@ public class TmdbClientService {
                 genres.add(g.path("name").asText());
             }
             result.setGenres(genres);
+        }
+
+        // Runtime (movies only)
+        if ("movie".equals(searchType) && detailNode.has("runtime") && !detailNode.path("runtime").isNull()) {
+            int runtime = detailNode.path("runtime").asInt(0);
+            if (runtime > 0) {
+                result.setRuntimeMinutes(runtime);
+            }
+        }
+
+        // Production companies -> studios
+        JsonNode companiesArr = detailNode.path("production_companies");
+        if (companiesArr.isArray() && companiesArr.size() > 0) {
+            List<String> studioNames = new ArrayList<>();
+            for (JsonNode company : companiesArr) {
+                String name = company.path("name").asText(null);
+                if (name != null && !name.isBlank()) {
+                    studioNames.add(name);
+                }
+            }
+            if (!studioNames.isEmpty()) {
+                result.setStudios(studioNames);
+            }
+        }
+
+        // Cast info from credits (top 20)
+        JsonNode creditsNode = detailNode.path("credits");
+        JsonNode castArr = creditsNode.path("cast");
+        if (castArr.isArray() && castArr.size() > 0) {
+            try {
+                ArrayNode castArray = objectMapper.createArrayNode();
+                int limit = Math.min(castArr.size(), 20);
+                for (int i = 0; i < limit; i++) {
+                    JsonNode actor = castArr.get(i);
+                    ObjectNode castObj = objectMapper.createObjectNode();
+                    castObj.put("name", actor.path("name").asText(""));
+                    castObj.put("character", actor.path("character").asText(""));
+                    String profilePath = actor.path("profile_path").asText(null);
+                    castObj.put("profile_path", profilePath != null ? profilePath : "");
+                    castArray.add(castObj);
+                }
+                result.setCastInfo(objectMapper.writeValueAsString(castArray));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize cast info for TMDb id {}", externalId, e);
+            }
         }
 
         result.getProviderIds().put("tmdb", externalId);

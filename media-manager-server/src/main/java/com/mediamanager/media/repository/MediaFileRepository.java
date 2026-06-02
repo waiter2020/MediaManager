@@ -28,4 +28,10 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, Integer> {
 
     @Query("SELECT f FROM MediaFile f WHERE f.deleted = true AND f.deletedAt < :before")
     List<MediaFile> findDeletedBefore(@Param("before") java.time.Instant before);
+
+    @Query("SELECT f FROM MediaFile f JOIN FETCH f.mediaItem i JOIN FETCH i.library WHERE i.library.id = :libraryId AND f.deleted = false")
+    List<MediaFile> findActiveByLibraryId(@Param("libraryId") Integer libraryId);
+
+    @Query("SELECT f FROM MediaFile f JOIN FETCH f.mediaItem i JOIN FETCH i.library WHERE i.library.id = :libraryId")
+    List<MediaFile> findAllByLibraryId(@Param("libraryId") Integer libraryId);
 }

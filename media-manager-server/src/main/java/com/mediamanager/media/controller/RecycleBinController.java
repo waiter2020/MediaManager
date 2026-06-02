@@ -37,8 +37,9 @@ public class RecycleBinController {
     @DeleteMapping("/{fileId}")
     @PreAuthorize("hasAuthority('media:delete')")
     @Operation(summary = "Permanently remove file record")
-    public ApiResponse<Void> purge(@PathVariable Integer fileId) {
-        recycleBinService.purgeRecord(fileId);
+    public ApiResponse<Void> purge(@PathVariable Integer fileId,
+                                   @RequestParam(defaultValue = "false") boolean deleteSource) {
+        recycleBinService.purgeRecord(fileId, deleteSource);
         return ApiResponse.success();
     }
 }

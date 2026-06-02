@@ -1,26 +1,27 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { Button, Popconfirm, message, Tooltip, Input, Select } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Button, Input, Popconfirm, Select, Tooltip, message } from 'antd';
 import {
-  PlusOutlined,
-  DeleteOutlined,
-  FolderOpenOutlined,
-  SyncOutlined,
-  EditOutlined,
-  VideoCameraOutlined,
-  PictureOutlined,
-  CustomerServiceOutlined,
+  ApiOutlined,
   AppstoreOutlined,
+  ClockCircleOutlined,
+  CustomerServiceOutlined,
+  DatabaseOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
+  PictureOutlined,
+  PlusOutlined,
   SearchOutlined,
   SortAscendingOutlined,
-  ClockCircleOutlined,
-  DatabaseOutlined,
-  ApiOutlined,
+  SyncOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons';
-import { history, useModel } from '@umijs/max';
-import { getLibraries, deleteLibrary, triggerScan } from '@/services/library';
+import { history, useAccess, useModel } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
+import { deleteLibrary, getLibraries, triggerScan } from '@/services/library';
 import type { ScanProgress } from '@/models/global';
+import type { LibraryPath, MediaLibrary } from '@/types/library';
 import './List.css';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -48,8 +49,8 @@ const SORT_OPTIONS = [
 
 function formatRelativeTime(isoStr?: string | null): string {
   if (!isoStr) return '从未';
-  const d = new Date(isoStr);
-  const diff = Date.now() - d.getTime();
+  const date = new Date(isoStr);
+  const diff = Date.now() - date.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return '刚刚';
   if (mins < 60) return `${mins} 分钟前`;
@@ -57,26 +58,27 @@ function formatRelativeTime(isoStr?: string | null): string {
   if (hours < 24) return `${hours} 小时前`;
   const days = Math.floor(hours / 24);
   if (days < 30) return `${days} 天前`;
-  return d.toLocaleDateString('zh-CN');
+  return date.toLocaleDateString('zh-CN');
 }
 
-function shortenPath(p: string, maxLen = 40): string {
-  if (!p || p.length <= maxLen) return p || '';
-  return '...' + p.slice(p.length - maxLen + 3);
+function shortenPath(path: string, maxLen = 40): string {
+  if (!path || path.length <= maxLen) return path || '';
+  return '...' + path.slice(path.length - maxLen + 3);
 }
 
 const LibraryList: React.FC = () => {
-  const [libraries, setLibraries] = useState<any[]>([]);
+  const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
   const { scanStatus } = useModel('global');
+  const access = useAccess();
 
   const fetchLibraries = async () => {
     setLoading(true);
     try {
       const res = await getLibraries();
-      if (res.code === 200) setLibraries(res.data);
+      if (res.code === 200) setLibraries(res.data || []);
     } finally {
       setLoading(false);
     }
@@ -86,8 +88,8 @@ const LibraryList: React.FC = () => {
     fetchLibraries();
   }, []);
 
-  const handleDelete = async (e: React.MouseEvent, id: number) => {
-    e.stopPropagation();
+  const handleDelete = async (e: React.MouseEvent | undefined, id: number) => {
+    e?.stopPropagation();
     const res = await deleteLibrary(id);
     if (res.code === 200) {
       message.success('删除成功');
@@ -110,9 +112,10 @@ const LibraryList: React.FC = () => {
       list = list.filter(
         (lib) =>
           lib.name?.toLowerCase().includes(kw) ||
-          lib.paths?.some((p: any) => p.path?.toLowerCase().includes(kw)),
+          lib.paths?.some((path: LibraryPath) => path.path?.toLowerCase().includes(kw)),
       );
     }
+
     const [field, order] = sortBy.split('-');
     list.sort((a, b) => {
       if (field === 'name') {
@@ -154,13 +157,11 @@ const LibraryList: React.FC = () => {
             </div>
           )}
         </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => history.push('/libraries/create')}
-        >
-          添加媒体库
-        </Button>
+        {access.canManageLibrary && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => history.push('/libraries/create')}>
+            添加媒体库
+          </Button>
+        )}
       </div>
 
       {!loading && libraries.length > 0 && (
@@ -214,14 +215,12 @@ const LibraryList: React.FC = () => {
             ))}
           </div>
         ) : filteredLibraries.length === 0 && keyword ? (
-          <EmptyState
-            description={`未找到"${keyword}"相关媒体库`}
-          />
+          <EmptyState description={`未找到与 "${keyword}" 相关的媒体库`} />
         ) : libraries.length === 0 ? (
           <EmptyState
-            description="还没有媒体库，创建一个开始管理你的媒体文件吧"
-            actionText="添加媒体库"
-            onAction={() => history.push('/libraries/create')}
+            description="还没有媒体库，创建一个开始管理你的媒体文件"
+            actionText={access.canManageLibrary ? '添加媒体库' : undefined}
+            onAction={access.canManageLibrary ? () => history.push('/libraries/create') : undefined}
           />
         ) : (
           <div className="libraries-grid">
@@ -241,12 +240,7 @@ const LibraryList: React.FC = () => {
                   onClick={() => history.push(`/libraries/${lib.id}`)}
                 >
                   <div className={`library-card-accent type-${typeKey}`}>
-                    {isScanning && (
-                      <div
-                        className="library-card-scan-bar"
-                        style={{ width: `${scanPct}%` }}
-                      />
-                    )}
+                    {isScanning && <div className="library-card-scan-bar" style={{ width: `${scanPct}%` }} />}
                   </div>
                   <div className="library-card-body">
                     <div className="library-card-top">
@@ -257,7 +251,7 @@ const LibraryList: React.FC = () => {
                         <div className="library-card-name">{lib.name}</div>
                         <div className="library-card-type">
                           {TYPE_LABELS[typeKey] || typeKey}
-                          {lib.language ? ` · ${lib.language}` : ''}
+                          {lib.language ? ` / ${lib.language}` : ''}
                         </div>
                       </div>
                       {isScanning && (
@@ -289,10 +283,10 @@ const LibraryList: React.FC = () => {
 
                     {lib.paths && lib.paths.length > 0 && (
                       <div className="library-card-paths">
-                        {lib.paths.slice(0, 2).map((p: any, i: number) => (
-                          <div key={i} className="library-card-path" title={p.path}>
+                        {lib.paths.slice(0, 2).map((path, index) => (
+                          <div key={`${path.path}-${index}`} className="library-card-path" title={path.path}>
                             <FolderOutlined />
-                            <span>{shortenPath(p.path)}</span>
+                            <span>{shortenPath(path.path)}</span>
                           </div>
                         ))}
                         {lib.paths.length > 2 && (
@@ -304,37 +298,43 @@ const LibraryList: React.FC = () => {
                     )}
 
                     <div className="library-card-actions">
-                      <Tooltip title="扫描">
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<SyncOutlined spin={isScanning} />}
-                          onClick={(e) => handleScan(e, lib.id)}
-                          disabled={isScanning}
-                        />
-                      </Tooltip>
-                      <Tooltip title="插件配置">
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<ApiOutlined />}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            history.push(`/libraries/${lib.id}/plugins`);
-                          }}
-                        />
-                      </Tooltip>
-                      <Tooltip title="编辑">
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<EditOutlined />}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            history.push(`/libraries/${lib.id}/edit`);
-                          }}
-                        />
-                      </Tooltip>
+                      {access.canScanLibrary && (
+                        <Tooltip title="扫描">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<SyncOutlined spin={isScanning} />}
+                            onClick={(e) => handleScan(e, lib.id)}
+                            disabled={isScanning}
+                          />
+                        </Tooltip>
+                      )}
+                      {access.canEditLibraryPlugins && (
+                        <Tooltip title="插件配置">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<ApiOutlined />}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              history.push(`/libraries/${lib.id}/plugins`);
+                            }}
+                          />
+                        </Tooltip>
+                      )}
+                      {access.canManageLibrary && (
+                        <Tooltip title="编辑">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<EditOutlined />}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              history.push(`/libraries/${lib.id}/edit`);
+                            }}
+                          />
+                        </Tooltip>
+                      )}
                       <Tooltip title="查看详情">
                         <Button
                           size="small"
@@ -347,22 +347,24 @@ const LibraryList: React.FC = () => {
                         />
                       </Tooltip>
                       <div className="library-card-actions-spacer" />
-                      <Popconfirm
-                        title="确认删除此媒体库？"
-                        description="删除后该库的所有媒体条目也将被移除"
-                        onConfirm={(e) => handleDelete(e as any, lib.id)}
-                        onCancel={(e) => e?.stopPropagation()}
-                      >
-                        <Tooltip title="删除">
-                          <Button
-                            size="small"
-                            type="text"
-                            danger
-                            icon={<DeleteOutlined />}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </Tooltip>
-                      </Popconfirm>
+                      {access.canDeleteLibrary && (
+                        <Popconfirm
+                          title="确认删除此媒体库？"
+                          description="删除后该库的所有媒体条目也会被移除"
+                          onConfirm={(e) => handleDelete(e as React.MouseEvent | undefined, lib.id)}
+                          onCancel={(e) => e?.stopPropagation()}
+                        >
+                          <Tooltip title="删除">
+                            <Button
+                              size="small"
+                              type="text"
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </Tooltip>
+                        </Popconfirm>
+                      )}
                     </div>
                   </div>
                 </div>

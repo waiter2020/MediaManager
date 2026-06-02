@@ -1,15 +1,15 @@
 package com.mediamanager.system.controller;
 
 import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.common.security.SecurityCurrentUser;
 import com.mediamanager.system.dto.*;
+import com.mediamanager.system.entity.SysUser;
 import com.mediamanager.system.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -21,6 +21,7 @@ import java.util.List;
 public class UserController {
 
     private final UserService userService;
+    private final SecurityCurrentUser securityCurrentUser;
 
     @GetMapping
     @PreAuthorize("hasAuthority('user:manage')")
@@ -86,29 +87,22 @@ public class UserController {
     @GetMapping("/me")
     @Operation(summary = "Get current user info")
     public ApiResponse<UserResponse> getCurrentUser() {
-        String username = getCurrentUsername();
-        return ApiResponse.success(userService.getUserByUsername(username));
+        SysUser user = securityCurrentUser.requireCurrentUser();
+        return ApiResponse.success(userService.getUserById(user.getId()));
     }
 
     @PutMapping("/me")
     @Operation(summary = "Update current user profile")
     public ApiResponse<UserResponse> updateCurrentUser(@RequestBody UserUpdateRequest request) {
-        String username = getCurrentUsername();
-        UserResponse current = userService.getUserByUsername(username);
-        return ApiResponse.success(userService.updateUser(current.getId(), request));
+        SysUser user = securityCurrentUser.requireCurrentUser();
+        return ApiResponse.success(userService.updateUser(user.getId(), request));
     }
 
     @PutMapping("/me/password")
     @Operation(summary = "Change current user password")
     public ApiResponse<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
-        String username = getCurrentUsername();
-        UserResponse current = userService.getUserByUsername(username);
-        userService.changePassword(current.getId(), request);
+        SysUser user = securityCurrentUser.requireCurrentUser();
+        userService.changePassword(user.getId(), request);
         return ApiResponse.success();
-    }
-
-    private String getCurrentUsername() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth.getName();
     }
 }

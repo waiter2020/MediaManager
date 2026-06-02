@@ -22,7 +22,14 @@ public class MediaLibraryResponse {
     private Long totalItems;
 
     private List<PathRes> paths;
+    /**
+     * @deprecated Derived from {@link #plugins} (EXTRACTOR kind only). Prefer {@code plugins[]}.
+     *             Legacy PUT {@code extractors[]} on library still syncs into {@code library_plugin_config}.
+     */
+    @Deprecated
     private List<ExtractorRes> extractors;
+    /** Unified library_plugin_config rows (preferred). */
+    private List<PluginRes> plugins;
 
     @Data
     @Builder
@@ -39,6 +46,16 @@ public class MediaLibraryResponse {
         private String type;
         private Integer priority;
         private Boolean enabled;
+        private String config;
+    }
+
+    @Data
+    @Builder
+    public static class PluginRes {
+        private String pluginId;
+        private String kind;
+        private Boolean enabled;
+        private Integer priority;
         private String config;
     }
 }

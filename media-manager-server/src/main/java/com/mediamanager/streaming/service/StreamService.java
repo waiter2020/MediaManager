@@ -2,12 +2,12 @@ package com.mediamanager.streaming.service;
 
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
+import com.mediamanager.common.service.StoragePathMapper;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -17,6 +17,10 @@ import org.springframework.http.HttpRange;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
@@ -31,30 +35,24 @@ public class StreamService {
 
     private final MediaFileRepository fileRepository;
     private final LibraryAccessService libraryAccessService;
+    private final StoragePathMapper storagePathMapper;
 
     private static final long CHUNK_SIZE = 1024 * 1024; // 1MB chunks
 
-    /**
-     * Optional path mapping to make persisted host paths work inside containers.
-     * Example (Windows Docker Desktop):
-     *   from: E:\Movies
-     *   to:   /home/media
-     */
-    @Value("${mediamanager.storage.path-map-from:}")
-    private String pathMapFrom;
-
-    @Value("${mediamanager.storage.path-map-to:}")
-    private String pathMapTo;
+    @org.springframework.beans.factory.annotation.Value("${mediamanager.data.cache-dir:./data/cache}")
+    private String cacheDir;
 
     public Resource getMediaResource(Integer fileId) {
         MediaFile mediaFile = loadReadableFile(fileId);
-        Path filePath = Paths.get(mapPathIfNeeded(mediaFile.getFilePath()));
+        Path filePath = resolveReadablePath(mediaFile);
         try {
             Resource resource = new UrlResource(filePath.toUri());
             if (resource.exists() && resource.isReadable()) {
                 return resource;
             } else {
-                throw new BusinessException(ErrorCode.FILE_SYSTEM_ERROR, "Could not read file: " + filePath);
+                log.warn("Media file is not readable: id={}, storedPath={}, resolvedPath={}",
+                        mediaFile.getId(), mediaFile.getFilePath(), filePath);
+                throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND);
             }
         } catch (MalformedURLException e) {
             log.error("Malformed URL for file path: {}", filePath, e);
@@ -80,22 +78,38 @@ public class StreamService {
 
     public ResponseEntity<Resource> getImageResource(Integer fileId, Integer width) throws IOException {
         MediaFile mediaFile = loadReadableFile(fileId);
-        Path filePath = Path.of(mapPathIfNeeded(mediaFile.getFilePath()));
-        if (!Files.exists(filePath)) {
-            throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND);
-        }
+        Path filePath = resolveReadablePath(mediaFile);
 
-        Resource resource = new FileSystemResource(filePath);
-        String contentType = Files.probeContentType(filePath);
-        if (contentType == null) contentType = "image/jpeg";
+        Path responsePath = resolveImageVariant(fileId, filePath, width);
+        Resource resource = new FileSystemResource(responsePath);
+        String contentType = Files.probeContentType(responsePath);
+        if (contentType == null) {
+            contentType = responsePath.toString().endsWith(".jpg") ? "image/jpeg" : "application/octet-stream";
+        }
 
         return ResponseEntity.ok()
                 .header("Content-Type", contentType)
+                .header("Cache-Control", "public, max-age=86400")
                 .body(resource);
     }
 
     public String mapPathForProcessing(String originalPath) {
-        return mapPathIfNeeded(originalPath);
+        return storagePathMapper.mapPathIfNeeded(originalPath);
+    }
+
+    public Path resolveReadablePath(MediaFile mediaFile) {
+        Path filePath = Paths.get(storagePathMapper.mapPathIfNeeded(mediaFile.getFilePath()));
+        if (!Files.exists(filePath) || !Files.isReadable(filePath)) {
+            log.warn("Media file not found: id={}, storedPath={}, resolvedPath={}, pathMappings={}, pathMapFrom={}, pathMapTo={}",
+                    mediaFile.getId(),
+                    mediaFile.getFilePath(),
+                    filePath,
+                    storagePathMapper.maskPathMappings(),
+                    storagePathMapper.maskPathMapFrom(),
+                    storagePathMapper.maskPathMapTo());
+            throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND);
+        }
+        return filePath;
     }
 
     private MediaFile loadReadableFile(Integer fileId) {
@@ -111,26 +125,38 @@ public class StreamService {
         return mediaFile;
     }
 
-    private String mapPathIfNeeded(String originalPath) {
-        if (originalPath == null || originalPath.isBlank()) {
-            return originalPath;
+    private Path resolveImageVariant(Integer fileId, Path source, Integer width) throws IOException {
+        if (width == null || width <= 0) {
+            return source;
         }
-        if (pathMapFrom == null || pathMapFrom.isBlank() || pathMapTo == null || pathMapTo.isBlank()) {
-            return originalPath;
-        }
-
-        // Normalize to forward slashes for prefix comparison
-        String p = originalPath.replace('\\', '/');
-        String from = pathMapFrom.replace('\\', '/');
-        String to = pathMapTo.replace('\\', '/');
-
-        if (p.regionMatches(true, 0, from, 0, from.length())) {
-            String suffix = p.substring(from.length());
-            if (!suffix.startsWith("/")) suffix = "/" + suffix;
-            String mapped = to.endsWith("/") ? to.substring(0, to.length() - 1) : to;
-            return mapped + suffix;
+        int targetWidth = Math.min(Math.max(width, 64), 2400);
+        Path outDir = Path.of(cacheDir, "images", String.valueOf(fileId));
+        Path out = outDir.resolve("w" + targetWidth + ".jpg");
+        if (Files.exists(out)
+                && Files.getLastModifiedTime(out).toMillis() >= Files.getLastModifiedTime(source).toMillis()) {
+            return out;
         }
 
-        return originalPath;
+        BufferedImage original = ImageIO.read(source.toFile());
+        if (original == null || original.getWidth() <= targetWidth) {
+            return source;
+        }
+
+        int targetHeight = Math.max(1, (int) Math.round(original.getHeight() * (targetWidth / (double) original.getWidth())));
+        BufferedImage scaled = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = scaled.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.fillRect(0, 0, targetWidth, targetHeight);
+            g.drawImage(original, 0, 0, targetWidth, targetHeight, null);
+        } finally {
+            g.dispose();
+        }
+
+        Files.createDirectories(outDir);
+        ImageIO.write(scaled, "jpg", out.toFile());
+        return out;
     }
 }

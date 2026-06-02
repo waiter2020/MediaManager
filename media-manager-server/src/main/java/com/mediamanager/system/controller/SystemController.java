@@ -1,5 +1,6 @@
 package com.mediamanager.system.controller;
 
+import com.mediamanager.common.constants.MediaManagerConstants;
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.library.dto.ScanProgressDTO;
@@ -38,13 +39,17 @@ public class SystemController {
     private final MediaItemRepository mediaItemRepository;
     private final TagRepository tagRepository;
     private final LibraryScanService libraryScanService;
+    private final com.mediamanager.system.service.SysConfigService sysConfigService;
+    private final com.mediamanager.system.service.SystemCapabilitiesService capabilitiesService;
 
     @GetMapping("/status")
     @Operation(summary = "Get system status")
     public ApiResponse<Map<String, Object>> getStatus() {
         Map<String, Object> status = new HashMap<>();
         status.put("setupCompleted", userRepository.count() > 0);
-        status.put("version", "1.0.0");
+        status.put("version", MediaManagerConstants.VERSION);
+        status.put("theme", sysConfigService.getAppearanceSettings().getTheme());
+        status.put("capabilities", capabilitiesService.capabilitiesSnapshot());
         return ApiResponse.success(status);
     }
 
@@ -112,6 +117,15 @@ public class SystemController {
     @PreAuthorize("hasAuthority('system:manage')")
     @Operation(summary = "Update system config")
     public ApiResponse<Void> updateConfig(@RequestBody Map<String, String> configMap) {
+        if (configMap != null) {
+            for (String key : configMap.keySet()) {
+                if (key != null && key.startsWith("ai.")) {
+                    throw new com.mediamanager.common.exception.BusinessException(
+                            com.mediamanager.common.exception.ErrorCode.VALIDATION_ERROR, 
+                            "AI configurations should be managed via /ai/config");
+                }
+            }
+        }
         configMap.forEach((key, value) -> {
             configRepository.findByConfigKey(key).ifPresent(config -> {
                 config.setConfigValue(value);
@@ -128,11 +142,19 @@ public class SystemController {
         return ApiResponse.success(libraryScanService.getActiveScans().values());
     }
 
+    @PostMapping("/scan/{libraryId}/cancel")
+    @PreAuthorize("hasAuthority('library:scan')")
+    @Operation(summary = "Cancel active library scan")
+    public ApiResponse<Void> cancelScan(@PathVariable Integer libraryId) {
+        libraryScanService.cancelScan(libraryId);
+        return ApiResponse.success();
+    }
+
     @GetMapping("/info")
     @Operation(summary = "Get system info")
     public ApiResponse<Map<String, Object>> getSystemInfo() {
         Map<String, Object> info = new HashMap<>();
-        info.put("version", "1.0.0");
+        info.put("version", MediaManagerConstants.VERSION);
         info.put("javaVersion", System.getProperty("java.version"));
         info.put("totalUsers", userRepository.count());
         info.put("totalLibraries", libraryRepository.count());

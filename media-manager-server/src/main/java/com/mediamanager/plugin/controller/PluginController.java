@@ -40,4 +40,10 @@ public class PluginController {
         libraryPluginConfigService.replaceConfigs(libraryId, configs);
         return ApiResponse.success();
     }
+
+    @PostMapping("/libraries/{libraryId}/plugins/apply-default")
+    @PreAuthorize("hasAuthority('library:edit')")
+    public ApiResponse<List<Map<String, Object>>> applyDefaultPlugins(@PathVariable Integer libraryId) {
+        return ApiResponse.success(libraryPluginConfigService.applyDefaultTemplate(libraryId));
+    }
 }

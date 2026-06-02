@@ -1,67 +1,173 @@
-import { PageContainer, ProForm, ProFormText, ProFormSelect, ProFormSwitch, ProFormDigit, ProFormList } from '@ant-design/pro-components';
-import { message, Card, Input, Button, Spin } from 'antd';
-import { history, useParams } from '@umijs/max';
-import React, { useState, useEffect } from 'react';
-import { createLibrary, getLibrary, updateLibrary } from '@/services/library';
-import DirectoryBrowser from '@/components/DirectoryBrowser';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  PageContainer,
+  ProForm,
+  ProFormDigit,
+  ProFormList,
+  ProFormSelect,
+  ProFormSwitch,
+  ProFormText,
+} from '@ant-design/pro-components';
+import { Alert, Button, Card, Input, message, Space, Spin, Steps, Table, Typography } from 'antd';
 import { FolderOpenOutlined } from '@ant-design/icons';
+import { history, useParams } from '@umijs/max';
+import DirectoryBrowser from '@/components/DirectoryBrowser';
+import { createLibrary, getLibrary, updateLibrary, type LibraryUpsertPayload } from '@/services/library';
+import type { LibraryPath, LibraryType } from '@/types/library';
+import { defaultPluginsForType, type PluginPreviewRow } from '@/utils/libraryPluginDefaults';
 
-const DirectoryInput: React.FC<{ value?: string; onChange?: (val: string) => void }> = ({ value, onChange }) => {
+interface DirectoryInputProps {
+  value?: string;
+  onChange?: (value: string) => void;
+}
+
+type LibraryFormValues = LibraryUpsertPayload;
+
+const DEFAULT_VALUES: LibraryFormValues = {
+  name: '',
+  type: 'MOVIE',
+  language: 'zh',
+  autoScan: true,
+  scanIntervalMinutes: 30,
+  paths: [],
+};
+
+const TYPE_OPTIONS = [
+  { label: '电影', value: 'MOVIE' },
+  { label: '剧集', value: 'TV_SHOW' },
+  { label: '图片', value: 'IMAGE' },
+  { label: '音频', value: 'AUDIO' },
+  { label: '混合', value: 'MIXED' },
+];
+
+const LANGUAGE_OPTIONS = [
+  { label: '中文 (zh)', value: 'zh' },
+  { label: '英文 (en)', value: 'en' },
+  { label: '日文 (ja)', value: 'ja' },
+];
+
+const DirectoryInput: React.FC<DirectoryInputProps> = ({ value, onChange }) => {
   const [visible, setVisible] = useState(false);
   return (
     <div style={{ display: 'flex', gap: 8 }}>
-      <Input value={value} onChange={(e) => onChange?.(e.target.value)} placeholder="请输入绝对路径" />
-      <Button icon={<FolderOpenOutlined />} onClick={() => setVisible(true)}>浏览</Button>
+      <Input value={value} onChange={(event) => onChange?.(event.target.value)} placeholder="请输入绝对路径" />
+      <Button icon={<FolderOpenOutlined />} onClick={() => setVisible(true)}>
+        浏览
+      </Button>
       <DirectoryBrowser
         visible={visible}
         onCancel={() => setVisible(false)}
-        onSelect={(p) => { onChange?.(p); setVisible(false); }}
+        onSelect={(path) => {
+          onChange?.(path);
+          setVisible(false);
+        }}
       />
     </div>
   );
 };
 
+function normalizePaths(paths?: LibraryPath[]) {
+  return (paths || [])
+    .map((item, index) => ({
+      path: item.path?.trim(),
+      priority: item.priority ?? index,
+    }))
+    .filter((item): item is LibraryPath => Boolean(item.path));
+}
+
 const LibraryCreate: React.FC = () => {
   const params = useParams<{ id?: string }>();
-  const isEdit = !!params.id;
-  const [initialValues, setInitialValues] = useState<any>(null);
+  const libraryId = params.id ? Number(params.id) : undefined;
+  const isEdit = Boolean(libraryId);
+  const [step, setStep] = useState(0);
+  const [formValues, setFormValues] = useState<LibraryFormValues>(DEFAULT_VALUES);
+  const [initialValues, setInitialValues] = useState<LibraryFormValues | null>(null);
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (isEdit && params.id) {
-      setLoading(true);
-      getLibrary(Number(params.id))
-        .then(res => {
-          if (res.code === 200) {
-            setInitialValues(res.data);
-          }
-        })
-        .finally(() => setLoading(false));
+    if (!isEdit || !libraryId) return;
+
+    setLoading(true);
+    getLibrary(libraryId)
+      .then((res) => {
+        if (res.code === 200 && res.data) {
+          const values: LibraryFormValues = {
+            name: res.data.name,
+            type: res.data.type,
+            language: res.data.language || 'zh',
+            autoScan: res.data.autoScan ?? true,
+            scanIntervalMinutes: res.data.scanIntervalMinutes ?? 30,
+            paths: res.data.paths || [],
+          };
+          setInitialValues(values);
+          setFormValues(values);
+        } else {
+          message.error(res.message || '加载媒体库失败');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, [isEdit, libraryId]);
+
+  const pluginPreview = useMemo<PluginPreviewRow[]>(
+    () => defaultPluginsForType(formValues.type || 'MOVIE'),
+    [formValues.type],
+  );
+
+  const buildPayload = (values: LibraryFormValues): LibraryUpsertPayload => ({
+    name: values.name?.trim(),
+    type: values.type as LibraryType,
+    language: values.language,
+    autoScan: values.autoScan,
+    scanIntervalMinutes: values.scanIntervalMinutes,
+    paths: normalizePaths(values.paths),
+  });
+
+  const submitCreate = async () => {
+    if (!formValues.name?.trim()) {
+      message.warning('请填写媒体库名称');
+      return;
     }
-  }, [params.id]);
-
-  const onFinish = async (values: any) => {
-    const payload = {
-      ...values,
-      extractors: values.extractors || [
-        { type: 'NFO', priority: 0, enabled: true },
-        { type: 'FFPROBE', priority: 1, enabled: true },
-        { type: 'TMDB', priority: 2, enabled: true, config: '{}' },
-      ],
-    };
-
-    let res;
-    if (isEdit) {
-      res = await updateLibrary(Number(params.id), payload);
-    } else {
-      res = await createLibrary(payload);
+    const paths = normalizePaths(formValues.paths);
+    if (paths.length === 0) {
+      message.warning('请至少添加一个有效目录');
+      setStep(1);
+      return;
     }
 
-    if (res.code === 200) {
-      message.success(isEdit ? '媒体库更新成功' : '媒体库创建成功');
-      history.push('/libraries');
-    } else {
-      message.error(res.message || '操作失败');
+    setSubmitting(true);
+    try {
+      const res = await createLibrary({ ...buildPayload(formValues), paths });
+      if (res.code === 200) {
+        message.success('媒体库创建成功');
+        if (res.data?.id) {
+          history.push(`/libraries/${res.data.id}/plugins`);
+          message.info('已按库类型应用默认插件，可在插件页微调后扫描');
+        } else {
+          history.push('/libraries');
+        }
+      } else {
+        message.error(res.message || '创建失败');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitEdit = async (values: LibraryFormValues) => {
+    if (!libraryId) return false;
+    setSubmitting(true);
+    try {
+      const res = await updateLibrary(libraryId, buildPayload(values));
+      if (res.code === 200) {
+        message.success('媒体库已更新');
+        history.push('/libraries');
+        return true;
+      }
+      message.error(res.message || '更新失败');
+      return false;
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -69,46 +175,121 @@ const LibraryCreate: React.FC = () => {
     return <Spin size="large" style={{ display: 'flex', justifyContent: 'center', marginTop: 100 }} />;
   }
 
+  if (isEdit) {
+    return (
+      <PageContainer title="编辑媒体库" onBack={() => history.push('/libraries')}>
+        <Card>
+          <ProForm<LibraryFormValues>
+            onFinish={submitEdit}
+            initialValues={initialValues || DEFAULT_VALUES}
+            key={initialValues ? 'loaded' : 'new'}
+            submitter={{ submitButtonProps: { loading: submitting } }}
+          >
+            <ProFormText name="name" label="媒体库名称" rules={[{ required: true }]} />
+            <ProFormSelect name="language" label="元数据语言" options={LANGUAGE_OPTIONS} />
+            <ProFormSwitch name="autoScan" label="启用自动扫描" />
+            <ProFormDigit name="scanIntervalMinutes" label="扫描间隔（分钟）" min={5} max={1440} />
+            <ProFormList name="paths" label="媒体库目录" creatorButtonProps={{ creatorButtonText: '添加目录' }}>
+              <ProForm.Item name="path" rules={[{ required: true, message: '请输入目录路径' }]}>
+                <DirectoryInput />
+              </ProForm.Item>
+            </ProFormList>
+          </ProForm>
+        </Card>
+      </PageContainer>
+    );
+  }
+
   return (
-    <PageContainer title={isEdit ? '编辑媒体库' : '创建媒体库'}>
+    <PageContainer title="创建媒体库" subTitle="配置基础信息、目录路径，并预览默认插件链。">
+      <Steps
+        current={step}
+        style={{ marginBottom: 24, maxWidth: 720 }}
+        items={[{ title: '基础信息' }, { title: '目录路径' }, { title: '插件预览' }]}
+      />
       <Card>
-        <ProForm
-          onFinish={onFinish}
-          initialValues={initialValues || undefined}
-          key={initialValues ? 'loaded' : 'new'}
+        <ProForm<LibraryFormValues>
+          submitter={false}
+          preserve
+          onValuesChange={(_, allValues) => setFormValues({ ...DEFAULT_VALUES, ...allValues })}
+          initialValues={DEFAULT_VALUES}
         >
-          <ProFormText name="name" label="媒体库名称" rules={[{ required: true }]} />
-          <ProFormSelect
-            name="type"
-            label="类型"
-            options={[
-              { label: '电影', value: 'MOVIE' },
-              { label: '剧集', value: 'TV_SHOW' },
-              { label: '图片', value: 'IMAGE' },
-              { label: '音频', value: 'AUDIO' },
-              { label: '混合', value: 'MIXED' },
-            ]}
-            rules={[{ required: true }]}
-            disabled={isEdit}
-          />
-          <ProFormSelect
-            name="language"
-            label="元数据语言"
-            initialValue="zh"
-            options={[
-              { label: '中文 (zh)', value: 'zh' },
-              { label: '英文 (en)', value: 'en' },
-              { label: '日文 (ja)', value: 'ja' },
-            ]}
-          />
-          <ProFormSwitch name="autoScan" label="启用自动扫描" initialValue={true} />
-          <ProFormDigit name="scanIntervalMinutes" label="扫描间隔（分钟）" initialValue={30} min={5} max={1440} />
-          <ProFormList name="paths" label="媒体库目录" creatorButtonProps={{ creatorButtonText: '添加目录' }}>
-            <ProForm.Item name="path" rules={[{ required: true, message: '请输入目录路径' }]}>
-              <DirectoryInput />
-            </ProForm.Item>
-          </ProFormList>
+          {step === 0 ? (
+            <>
+              <ProFormText name="name" label="媒体库名称" rules={[{ required: true }]} />
+              <ProFormSelect name="type" label="类型" options={TYPE_OPTIONS} rules={[{ required: true }]} />
+              <ProFormSelect name="language" label="元数据语言" options={LANGUAGE_OPTIONS} />
+              <ProFormSwitch name="autoScan" label="启用自动扫描" />
+              <ProFormDigit name="scanIntervalMinutes" label="扫描间隔（分钟）" min={5} max={1440} />
+            </>
+          ) : null}
+          {step === 1 ? (
+            <ProFormList
+              name="paths"
+              label="媒体库目录"
+              creatorButtonProps={{ creatorButtonText: '添加目录' }}
+              rules={[{ required: true, message: '至少添加一个目录' }]}
+            >
+              <ProForm.Item name="path" rules={[{ required: true, message: '请输入目录路径' }]}>
+                <DirectoryInput />
+              </ProForm.Item>
+            </ProFormList>
+          ) : null}
+          {step === 2 ? (
+            <>
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="将自动应用以下默认插件"
+                description="创建后可在插件配置页增删或调整优先级；TMDb API Key 使用全局集成设置，也可被库级配置覆盖。"
+              />
+              <Table<PluginPreviewRow>
+                size="small"
+                pagination={false}
+                rowKey={(row) => `${row.pluginId}-${row.kind}`}
+                dataSource={pluginPreview}
+                columns={[
+                  { title: '插件', dataIndex: 'pluginId' },
+                  { title: '类型', dataIndex: 'kind', width: 120 },
+                  { title: '优先级', dataIndex: 'priority', width: 90 },
+                ]}
+              />
+              <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+                当前库类型：{formValues.type || 'MOVIE'}
+              </Typography.Paragraph>
+            </>
+          ) : null}
         </ProForm>
+        <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between' }}>
+          <Button disabled={step === 0} onClick={() => setStep((current) => current - 1)}>
+            上一步
+          </Button>
+          <Space>
+            {step < 2 ? (
+              <Button
+                type="primary"
+                onClick={() => {
+                  if (step === 0 && !formValues.name?.trim()) {
+                    message.warning('请填写媒体库名称');
+                    return;
+                  }
+                  if (step === 1 && normalizePaths(formValues.paths).length === 0) {
+                    message.warning('请至少添加一个有效目录');
+                    return;
+                  }
+                  setStep((current) => current + 1);
+                }}
+              >
+                下一步
+              </Button>
+            ) : (
+              <Button type="primary" loading={submitting} onClick={submitCreate}>
+                创建并完成
+              </Button>
+            )}
+          </Space>
+        </div>
       </Card>
     </PageContainer>
   );

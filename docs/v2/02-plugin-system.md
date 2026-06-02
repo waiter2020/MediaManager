@@ -104,6 +104,17 @@ public class PluginRegistry {
 
 **兼容**：从 `library_extractor_config` 迁移，`extractor_type` → `plugin_id`，`kind=EXTRACTOR`。
 
+### 5.1.1 单一配置源（2026-05 重审）
+
+| 存储 | 角色 |
+|------|------|
+| `library_plugin_config` | **权威**：扫描/刮削管线、`GET /libraries/{id}` 的 `plugins[]` |
+| `library_extractor_config` | **遗留表**：仅当客户端仍 `PUT /libraries/{id}` 携带 `extractors[]` 时写入并 `syncFromExtractorConfigs` |
+
+`PUT /libraries/{id}/plugins` **不再**回写 legacy 表。API 响应中的 `extractors[]` 由 `plugins[]` 中 `kind=EXTRACTOR` 派生，标记 **deprecated**，计划在 v2.1 移除。
+
+前端：仅消费 `plugins[]`；库详情/插件页展示 SCRAPER 缺失警告。
+
 ### 5.2 配置 Schema
 
 每个插件可提供 `config-schema.json`（JSON Schema Draft 07），用于：

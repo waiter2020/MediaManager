@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Modal, List, Breadcrumb, message, Space } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { Breadcrumb, List, Modal, Space, message } from 'antd';
 import { FolderOutlined, HomeOutlined } from '@ant-design/icons';
-import { getDirectories } from '@/services/system';
+import { getDirectories, type DirectoryItem } from '@/services/system';
 
 interface DirectoryBrowserProps {
   visible: boolean;
@@ -10,10 +10,10 @@ interface DirectoryBrowserProps {
 }
 
 const DirectoryBrowser: React.FC<DirectoryBrowserProps> = ({ visible, onCancel, onSelect }) => {
-  const [currentPath, setCurrentPath] = useState<string>('');
-  const [directories, setDirectories] = useState<any[]>([]);
+  const [currentPath, setCurrentPath] = useState('');
+  const [directories, setDirectories] = useState<DirectoryItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [pathStack, setPathStack] = useState<{name: string, path: string}[]>([]);
+  const [pathStack, setPathStack] = useState<{ name: string; path: string }[]>([]);
 
   useEffect(() => {
     if (visible) {
@@ -26,34 +26,31 @@ const DirectoryBrowser: React.FC<DirectoryBrowserProps> = ({ visible, onCancel, 
     try {
       const res = await getDirectories(path);
       if (res.code === 200) {
-        setDirectories(res.data);
+        setDirectories(res.data || []);
       } else {
         message.error(res.message || '获取目录失败');
       }
-    } catch (e) {
+    } catch {
       message.error('请求失败');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
-  const handleNavigate = (dir: any) => {
+  const handleNavigate = (dir: DirectoryItem) => {
     setCurrentPath(dir.path);
-    if (!currentPath) {
-      setPathStack([{ name: dir.name, path: dir.path }]);
-    } else {
-      setPathStack([...pathStack, { name: dir.name, path: dir.path }]);
-    }
+    setPathStack((prev) => (currentPath ? [...prev, { name: dir.name, path: dir.path }] : [{ name: dir.name, path: dir.path }]));
   };
 
   const handleBreadcrumbClick = (index: number) => {
     if (index === -1) {
       setCurrentPath('');
       setPathStack([]);
-    } else {
-      const newStack = pathStack.slice(0, index + 1);
-      setCurrentPath(newStack[newStack.length - 1].path);
-      setPathStack(newStack);
+      return;
     }
+    const newStack = pathStack.slice(0, index + 1);
+    setCurrentPath(newStack[newStack.length - 1].path);
+    setPathStack(newStack);
   };
 
   return (
@@ -78,31 +75,27 @@ const DirectoryBrowser: React.FC<DirectoryBrowserProps> = ({ visible, onCancel, 
       <div style={{ marginBottom: 16, padding: '0 24px' }}>
         <Breadcrumb>
           <Breadcrumb.Item onClick={() => handleBreadcrumbClick(-1)}>
-            <span style={{ cursor: 'pointer' }}><HomeOutlined /> 根目录</span>
+            <span style={{ cursor: 'pointer' }}>
+              <HomeOutlined /> 根目录
+            </span>
           </Breadcrumb.Item>
-          {pathStack.map((p, index) => (
-            <Breadcrumb.Item key={p.path} onClick={() => handleBreadcrumbClick(index)}>
-              <span style={{ cursor: 'pointer' }}>{p.name}</span>
+          {pathStack.map((path, index) => (
+            <Breadcrumb.Item key={path.path} onClick={() => handleBreadcrumbClick(index)}>
+              <span style={{ cursor: 'pointer' }}>{path.name}</span>
             </Breadcrumb.Item>
           ))}
         </Breadcrumb>
       </div>
-      
+
       <List
         loading={loading}
         dataSource={directories}
         style={{ height: 400, overflow: 'auto', borderTop: '1px solid #303030' }}
-        renderItem={item => (
+        renderItem={(item) => (
           <List.Item
             style={{ cursor: 'pointer', padding: '12px 24px' }}
             onClick={() => handleNavigate(item)}
             className="directory-item"
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLDivElement).style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-            }}
           >
             <Space>
               <FolderOutlined style={{ color: '#1890ff', fontSize: 18 }} />
