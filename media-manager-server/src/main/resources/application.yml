@@ -1,0 +1,120 @@
+server:
+  port: 8080
+
+spring:
+  main:
+    allow-circular-references: true
+  application:
+    name: MediaManager
+
+  # Database
+  datasource:
+    url: jdbc:sqlite:${MEDIA_MANAGER_DATA_DIR:./data}/mediamanager.db?journal_mode=WAL&busy_timeout=60000
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      # SQLite has a single writer. Keep one pooled connection so app-level writes queue
+      # through Hikari instead of competing for SQLite's file lock.
+      maximum-pool-size: 1
+      minimum-idle: 1
+      connection-timeout: 60000
+      connection-test-query: SELECT 1
+
+  # JPA
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    open-in-view: false
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+
+  # Flyway
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # Jackson
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: UTC
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+  # Cache
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=10000,expireAfterWrite=3600s
+
+  # Servlet (for file uploads)
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  # Virtual Threads
+  threads:
+    virtual:
+      enabled: true
+
+# Security / JWT
+mediamanager:
+  auth:
+    enabled: true
+    jwt:
+      secret: ${MEDIAMANAGER_AUTH_JWT_SECRET:your-256-bit-secret-key-change-this-in-production-please}
+      access-token-expiration: 2592000000   # 30 days in ms
+      refresh-token-expiration: 15552000000 # 180 days in ms
+  # FFmpeg
+  ffmpeg:
+    path: ffmpeg
+  hls:
+    segment-duration: 6
+  playback:
+    hardware-encoder: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ENCODER:h264_nvenc}
+  ai:
+    default-provider: ${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}
+    llm-provider: ${MEDIAMANAGER_AI_LLM_PROVIDER:${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}}
+    embed-provider: ${MEDIAMANAGER_AI_EMBED_PROVIDER:${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}}
+    classifier:
+      enabled: true
+    ollama:
+      base-url: ${MEDIAMANAGER_AI_OLLAMA_BASE_URL:http://localhost:11434}
+  # Data directories
+  data:
+    cache-dir: ./data/cache
+    thumbnail-dir: ./data/cache/thumbnails
+    image-cache-dir: ./data/cache/images
+  # Docker path mapping (see docker-compose.yml / .env)
+  storage:
+    path-mappings: ${MEDIAMANAGER_STORAGE_PATH_MAPPINGS:}
+    path-map-from: ${MEDIAMANAGER_STORAGE_PATH_MAP_FROM:}
+    path-map-to: ${MEDIAMANAGER_STORAGE_PATH_MAP_TO:/home/media}
+  # Metadata scraper
+  scraper:
+    cron: "0 0 4 * * ?"         # Daily scrape at 4 AM
+    batch-size: 50               # Items per batch
+    request-delay-ms: 2000       # Delay between requests (anti-ban)
+    timeout-seconds: 30          # HTTP request timeout
+
+# SpringDoc
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+# Logging
+logging:
+  level:
+    com.mediamanager: DEBUG
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN

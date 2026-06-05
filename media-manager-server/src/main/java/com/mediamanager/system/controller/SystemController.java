@@ -1,0 +1,197 @@
+package com.mediamanager.system.controller;
+
+import com.mediamanager.common.constants.MediaManagerConstants;
+import com.mediamanager.classification.repository.TagRepository;
+import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.library.dto.ScanProgressDTO;
+import com.mediamanager.library.repository.MediaLibraryRepository;
+import com.mediamanager.library.service.LibraryScanService;
+import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.system.dto.SystemLogEventDto;
+import com.mediamanager.system.repository.SysConfigRepository;
+import com.mediamanager.system.repository.SysUserRepository;
+import com.mediamanager.system.dto.DirectoryDTO;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@RestController
+@RequestMapping("/api/v1/system")
+@RequiredArgsConstructor
+@Tag(name = "System", description = "System status APIs")
+public class SystemController {
+
+    private final SysUserRepository userRepository;
+    private final SysConfigRepository configRepository;
+    private final MediaLibraryRepository libraryRepository;
+    private final MediaItemRepository mediaItemRepository;
+    private final TagRepository tagRepository;
+    private final LibraryScanService libraryScanService;
+    private final com.mediamanager.system.service.SysConfigService sysConfigService;
+    private final com.mediamanager.system.service.SystemCapabilitiesService capabilitiesService;
+
+    @GetMapping("/status")
+    @Operation(summary = "Get system status")
+    public ApiResponse<Map<String, Object>> getStatus() {
+        Map<String, Object> status = new HashMap<>();
+        status.put("setupCompleted", userRepository.count() > 0);
+        status.put("version", MediaManagerConstants.VERSION);
+        status.put("theme", sysConfigService.getAppearanceSettings().getTheme());
+        status.put("capabilities", capabilitiesService.capabilitiesSnapshot());
+        return ApiResponse.success(status);
+    }
+
+    @GetMapping("/capabilities")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get system runtime capabilities")
+    public ApiResponse<Map<String, Object>> getCapabilities() {
+        return ApiResponse.success(capabilitiesService.capabilitiesSnapshot());
+    }
+
+    @GetMapping("/directories")
+    @PreAuthorize("hasAuthority('library:create')")
+    @Operation(summary = "List server directories")
+    public ApiResponse<List<DirectoryDTO>> listDirectories(@RequestParam(required = false) String path) {
+        List<DirectoryDTO> directories = new ArrayList<>();
+        if (path == null || path.trim().isEmpty()) {
+            File[] roots = File.listRoots();
+            if (roots != null) {
+                for (File root : roots) {
+                    directories.add(DirectoryDTO.builder()
+                            .name(root.getAbsolutePath())
+                            .path(root.getAbsolutePath())
+                            .hasChildren(hasSubDirectories(root))
+                            .build());
+                }
+            }
+        } else {
+            File dir = new File(path);
+            if (dir.exists() && dir.isDirectory()) {
+                File[] files = dir.listFiles(File::isDirectory);
+                if (files != null) {
+                    Arrays.sort(files, (f1, f2) -> f1.getName().compareToIgnoreCase(f2.getName()));
+                    for (File file : files) {
+                        if (!file.isHidden()) {
+                            directories.add(DirectoryDTO.builder()
+                                    .name(file.getName())
+                                    .path(file.getAbsolutePath())
+                                    .hasChildren(hasSubDirectories(file))
+                                    .build());
+                        }
+                    }
+                }
+            }
+        }
+        return ApiResponse.success(directories);
+    }
+
+    private boolean hasSubDirectories(File dir) {
+        try {
+            File[] files = dir.listFiles(File::isDirectory);
+            return files != null && files.length > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @GetMapping("/config")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get all system configs")
+    public ApiResponse<List<Map<String, String>>> getConfigs() {
+        List<Map<String, String>> configs = configRepository.findAll().stream()
+                .map(c -> Map.of(
+                        "key", c.getConfigKey(),
+                        "value", c.getConfigValue() != null ? c.getConfigValue() : "",
+                        "description", c.getDescription() != null ? c.getDescription() : ""
+                ))
+                .collect(Collectors.toList());
+        return ApiResponse.success(configs);
+    }
+
+    @PutMapping("/config")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Update system config")
+    public ApiResponse<Void> updateConfig(@RequestBody Map<String, String> configMap) {
+        if (configMap != null) {
+            for (String key : configMap.keySet()) {
+                if (key != null && key.startsWith("ai.")) {
+                    throw new com.mediamanager.common.exception.BusinessException(
+                            com.mediamanager.common.exception.ErrorCode.VALIDATION_ERROR, 
+                            "AI configurations should be managed via /ai/config");
+                }
+            }
+        }
+        configMap.forEach((key, value) -> {
+            configRepository.findByConfigKey(key).ifPresent(config -> {
+                config.setConfigValue(value);
+                configRepository.save(config);
+            });
+        });
+        return ApiResponse.success();
+    }
+
+    @GetMapping("/scan/status")
+    @PreAuthorize("hasAuthority('task:view')")
+    @Operation(summary = "Get active scan progress snapshot")
+    public ApiResponse<java.util.Collection<ScanProgressDTO>> getScanStatus() {
+        return ApiResponse.success(libraryScanService.getActiveScans().values());
+    }
+
+    @PostMapping("/scan/{libraryId}/cancel")
+    @PreAuthorize("hasAuthority('library:scan')")
+    @Operation(summary = "Cancel active library scan")
+    public ApiResponse<Void> cancelScan(@PathVariable Integer libraryId) {
+        libraryScanService.cancelScan(libraryId);
+        return ApiResponse.success();
+    }
+
+    @GetMapping("/info")
+    @Operation(summary = "Get system info")
+    public ApiResponse<Map<String, Object>> getSystemInfo() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("version", MediaManagerConstants.VERSION);
+        info.put("javaVersion", System.getProperty("java.version"));
+        info.put("totalUsers", userRepository.count());
+        info.put("totalLibraries", libraryRepository.count());
+        info.put("totalMediaItems", mediaItemRepository.countByHiddenFalse());
+        info.put("setupCompleted", userRepository.count() > 0);
+        // Per-type media counts for dashboard (exclude hidden / recycle-only items)
+        info.put("videoCount", mediaItemRepository.countByTypeAndHiddenFalse("MOVIE")
+                + mediaItemRepository.countByTypeAndHiddenFalse("TV_SHOW"));
+        info.put("imageCount", mediaItemRepository.countByTypeAndHiddenFalse("IMAGE"));
+        info.put("audioCount", mediaItemRepository.countByTypeAndHiddenFalse("AUDIO"));
+        info.put("tagCount", tagRepository.count());
+        return ApiResponse.success(info);
+    }
+
+    @GetMapping("/logs/recent")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get recent system log events")
+    public ApiResponse<java.util.List<SystemLogEventDto>> getRecentLogs() {
+        java.util.List<SystemLogEventDto> events = com.mediamanager.system.service.SystemLogBroadcaster
+                .getInstance()
+                .getRecentEventsSnapshot();
+        return ApiResponse.success(events);
+    }
+
+    @GetMapping("/logs/stream")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Stream system logs via SSE")
+    public SseEmitter streamLogs() {
+        return com.mediamanager.system.service.SystemLogBroadcaster
+                .getInstance()
+                .registerEmitter();
+    }
+}

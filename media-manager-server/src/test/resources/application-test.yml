@@ -1,0 +1,36 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:file:target/test-mediamanager.db?mode=memory&cache=shared&busy_timeout=60000
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+      connection-timeout: 60000
+  jpa:
+    hibernate:
+      ddl-auto: none
+    database-platform: org.hibernate.community.dialect.SQLiteDialect
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+mediamanager:
+  auth:
+    enabled: true
+    jwt:
+      secret: test-jwt-secret-key-must-be-at-least-32-chars-long
+      access-token-expiration: 3600000
+      refresh-token-expiration: 86400000
+  ai:
+    default-provider: noop
+    llm-provider: noop
+    embed-provider: noop
+  library:
+    scan:
+      enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.mediamanager: INFO

@@ -1,0 +1,52 @@
+package com.mediamanager.media.dto;
+
+import com.mediamanager.metadata.dto.AudioMetadataDto;
+import com.mediamanager.metadata.dto.ImageMetadataDto;
+import com.mediamanager.metadata.dto.MovieMetadataDto;
+import com.mediamanager.metadata.dto.TvShowMetadataDto;
+import lombok.Builder;
+import lombok.Data;
+
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+
+@Data
+@Builder
+public class MediaItemDetailResponse {
+
+    private Integer id;
+    private Integer libraryId;
+    private String libraryName;
+    private String title;
+    private String originalTitle;
+    private String type;
+    private String status;
+    private LocalDate releaseDate;
+    private Float rating;
+    private String overview;
+    private String posterPath;
+    private String backdropPath;
+    private Instant createdAt;
+    private Instant updatedAt;
+
+    private List<Integer> fileIds;
+    private List<MediaFileDto> files;
+    private List<MediaChapterDto> chapters;
+    private List<MediaSubtitleDto> subtitles;
+    private List<TagDto> tags;
+    private List<CategoryDto> categories;
+
+    private Integer playbackPosition;
+    private Integer playbackDuration;
+    private Double playbackPercent;
+    private Boolean watched;
+    private Boolean favorited;
+    private Boolean watchlisted;
+
+    private MovieMetadataDto movieMetadata;
+    private TvShowMetadataDto tvShowMetadata;
+    private ImageMetadataDto imageMetadata;
+    private AudioMetadataDto audioMetadata;
+}
+
