@@ -23,8 +23,18 @@ public class SystemCapabilitiesService {
     @Value("${mediamanager.ffmpeg.path:ffmpeg}")
     private String yamlFfmpegPath;
 
+    @Value("${mediamanager.ffprobe.path:ffprobe}")
+    private String yamlFfprobePath;
+
     public boolean isFfmpegAvailable() {
-        String path = sysConfigService.ffmpegPath(yamlFfmpegPath);
+        return isCommandAvailable(sysConfigService.ffmpegPath(yamlFfmpegPath));
+    }
+
+    public boolean isFfprobeAvailable() {
+        return isCommandAvailable(sysConfigService.ffprobePath(yamlFfprobePath));
+    }
+
+    private boolean isCommandAvailable(String path) {
         try {
             Process process = new ProcessBuilder(path, "-version")
                     .redirectErrorStream(true)
@@ -40,19 +50,29 @@ public class SystemCapabilitiesService {
         Map<String, Object> caps = new HashMap<>();
         caps.put("ffmpegAvailable", isFfmpegAvailable());
         caps.put("ffmpegPath", sysConfigService.ffmpegPath(yamlFfmpegPath));
+        caps.put("ffprobeAvailable", isFfprobeAvailable());
+        caps.put("ffprobePath", sysConfigService.ffprobePath(yamlFfprobePath));
         caps.put("embeddingCount", embeddingIndexService.countEmbeddings());
         caps.put("hasIndexedVectors", embeddingIndexService.hasIndexedVectors());
         boolean embeddingAvailable = aiOrchestrator.isEmbeddingAvailable();
         caps.put("embeddingAvailable", embeddingAvailable);
 
-        AiProvider provider = aiOrchestrator.resolve(AiTaskType.EMBED_TEXT);
-        var config = aiOrchestrator.defaultConfig();
-        String providerId = provider.providerId();
+        AiProvider embedProvider = aiOrchestrator.resolve(AiTaskType.EMBED_TEXT);
+        AiProvider llmProvider = aiOrchestrator.resolve(AiTaskType.NL_QUERY);
+        var embedConfig = aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT);
+        var llmConfig = aiOrchestrator.defaultConfig(AiTaskType.NL_QUERY);
+        String providerId = embedProvider.providerId();
         caps.put("aiProvider", providerId);
-        caps.put("aiProviderName", provider.displayName());
-        caps.put("embedModel", config.get("embedModel"));
-        caps.put("llmModel", config.get("llmModel"));
-        caps.put("aiBaseUrl", config.get("baseUrl"));
+        caps.put("aiProviderName", embedProvider.displayName());
+        caps.put("embedProvider", providerId);
+        caps.put("embedProviderName", embedProvider.displayName());
+        caps.put("llmProvider", llmProvider.providerId());
+        caps.put("llmProviderName", llmProvider.displayName());
+        caps.put("embedModel", embedConfig.get("embedModel"));
+        caps.put("llmModel", llmConfig.get("llmModel"));
+        caps.put("aiBaseUrl", embedConfig.get("baseUrl"));
+        caps.put("embedBaseUrl", embedConfig.get("baseUrl"));
+        caps.put("llmBaseUrl", llmConfig.get("baseUrl"));
         caps.put("classifierEnabled", aiOrchestrator.isClassifierEnabled());
         caps.put("isNoopProvider", "noop".equalsIgnoreCase(providerId));
         caps.put("aiDegraded", "noop".equalsIgnoreCase(providerId) || !embeddingAvailable);

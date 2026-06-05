@@ -10,9 +10,15 @@ interface Capabilities {
   embeddingAvailable?: boolean;
   aiProvider?: string;
   aiProviderName?: string;
+  llmProvider?: string;
+  llmProviderName?: string;
+  embedProvider?: string;
+  embedProviderName?: string;
   embedModel?: string;
   llmModel?: string;
   aiBaseUrl?: string;
+  llmBaseUrl?: string;
+  embedBaseUrl?: string;
   classifierEnabled?: boolean;
   isNoopProvider?: boolean;
   aiDegraded?: boolean;
@@ -55,11 +61,14 @@ const SystemCapabilitiesCard: React.FC = () => {
           </Tag>
           {caps.ffmpegPath && <span style={{ marginLeft: 8 }}>{caps.ffmpegPath}</span>}
         </Descriptions.Item>
-        <Descriptions.Item label="AI 提供方">
-          {caps.aiProviderName || caps.aiProvider || '-'}
+        <Descriptions.Item label="向量提供方">
+          {caps.embedProviderName || caps.aiProviderName || caps.embedProvider || caps.aiProvider || '-'}
           {caps.isNoopProvider && (
             <Tag color="warning" style={{ marginLeft: 8 }}>noop</Tag>
           )}
+        </Descriptions.Item>
+        <Descriptions.Item label="LLM 提供方">
+          {caps.llmProviderName || caps.llmProvider || '-'}
         </Descriptions.Item>
         <Descriptions.Item label="嵌入模型">{caps.embedModel || '-'}</Descriptions.Item>
         <Descriptions.Item label="LLM 模型">{caps.llmModel || '-'}</Descriptions.Item>
@@ -75,7 +84,8 @@ const SystemCapabilitiesCard: React.FC = () => {
         <Descriptions.Item label="AI 打标">
           {caps.classifierEnabled ? '已启用' : '已关闭'}
         </Descriptions.Item>
-        <Descriptions.Item label="服务地址">{caps.aiBaseUrl || '-'}</Descriptions.Item>
+        <Descriptions.Item label="向量服务地址">{caps.embedBaseUrl || caps.aiBaseUrl || '-'}</Descriptions.Item>
+        <Descriptions.Item label="LLM 服务地址">{caps.llmBaseUrl || '-'}</Descriptions.Item>
       </Descriptions>
     </Card>
   );

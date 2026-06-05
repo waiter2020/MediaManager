@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   PageContainer,
   ProForm,
   ProFormDigit,
+  type ProFormInstance,
   ProFormList,
   ProFormSelect,
   ProFormSwitch,
@@ -49,7 +50,7 @@ const LANGUAGE_OPTIONS = [
 const DirectoryInput: React.FC<DirectoryInputProps> = ({ value, onChange }) => {
   const [visible, setVisible] = useState(false);
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
+    <div className="directory-input-row">
       <Input value={value} onChange={(event) => onChange?.(event.target.value)} placeholder="请输入绝对路径" />
       <Button icon={<FolderOpenOutlined />} onClick={() => setVisible(true)}>
         浏览
@@ -66,7 +67,7 @@ const DirectoryInput: React.FC<DirectoryInputProps> = ({ value, onChange }) => {
   );
 };
 
-function normalizePaths(paths?: LibraryPath[]) {
+function normalizePaths(paths?: Partial<LibraryPath>[]): LibraryPath[] {
   return (paths || [])
     .map((item, index) => ({
       path: item.path?.trim(),
@@ -75,10 +76,21 @@ function normalizePaths(paths?: LibraryPath[]) {
     .filter((item): item is LibraryPath => Boolean(item.path));
 }
 
+const PATH_LIST_RULES = [
+  {
+    validator: async (_: unknown, value?: Partial<LibraryPath>[]) => {
+      if (normalizePaths(value).length === 0) {
+        throw new Error('请至少添加一个有效目录');
+      }
+    },
+  },
+];
+
 const LibraryCreate: React.FC = () => {
   const params = useParams<{ id?: string }>();
   const libraryId = params.id ? Number(params.id) : undefined;
   const isEdit = Boolean(libraryId);
+  const formRef = useRef<ProFormInstance<LibraryFormValues>>();
   const [step, setStep] = useState(0);
   const [formValues, setFormValues] = useState<LibraryFormValues>(DEFAULT_VALUES);
   const [initialValues, setInitialValues] = useState<LibraryFormValues | null>(null);
@@ -123,21 +135,66 @@ const LibraryCreate: React.FC = () => {
     paths: normalizePaths(values.paths),
   });
 
-  const submitCreate = async () => {
-    if (!formValues.name?.trim()) {
-      message.warning('请填写媒体库名称');
+  const getLatestFormValues = (): LibraryFormValues => ({
+    ...DEFAULT_VALUES,
+    ...formRef.current?.getFieldsValue(true),
+  });
+
+  const syncLatestFormValues = () => {
+    const latestValues = getLatestFormValues();
+    setFormValues(latestValues);
+    return latestValues;
+  };
+
+  const markPathError = (errorMessage = '请至少添加一个有效目录') => {
+    formRef.current?.setFields([{ name: ['paths'], errors: [errorMessage] }]);
+  };
+
+  const handleNext = async () => {
+    if (!formRef.current) return;
+
+    try {
+      if (step === 0) {
+        await formRef.current.validateFields([['name'], ['type']]);
+      } else if (step === 1) {
+        await formRef.current.validateFields([['paths']]);
+      }
+    } catch {
+      message.warning(step === 0 ? '请填写媒体库名称' : '请至少添加一个有效目录');
       return;
     }
-    const paths = normalizePaths(formValues.paths);
+
+    const latestValues = syncLatestFormValues();
+    if (step === 1 && normalizePaths(latestValues.paths).length === 0) {
+      markPathError();
+      message.warning('请至少添加一个有效目录');
+      return;
+    }
+
+    setStep((current) => current + 1);
+  };
+
+  const submitCreate = async () => {
+    const latestValues = syncLatestFormValues();
+    if (!latestValues.name?.trim()) {
+      message.warning('请填写媒体库名称');
+      setStep(0);
+      setTimeout(() => {
+        formRef.current?.validateFields([['name']]).catch(() => undefined);
+      }, 0);
+      return;
+    }
+    const paths = normalizePaths(latestValues.paths);
     if (paths.length === 0) {
       message.warning('请至少添加一个有效目录');
       setStep(1);
+      setTimeout(() => markPathError(), 0);
       return;
     }
 
     setSubmitting(true);
     try {
-      const res = await createLibrary({ ...buildPayload(formValues), paths });
+      const res = await createLibrary({ ...buildPayload(latestValues), paths });
       if (res.code === 200) {
         message.success('媒体库创建成功');
         if (res.data?.id) {
@@ -185,12 +242,21 @@ const LibraryCreate: React.FC = () => {
             key={initialValues ? 'loaded' : 'new'}
             submitter={{ submitButtonProps: { loading: submitting } }}
           >
-            <ProFormText name="name" label="媒体库名称" rules={[{ required: true }]} />
+            <ProFormText
+              name="name"
+              label="媒体库名称"
+              rules={[{ required: true, whitespace: true, message: '请填写媒体库名称' }]}
+            />
             <ProFormSelect name="language" label="元数据语言" options={LANGUAGE_OPTIONS} />
             <ProFormSwitch name="autoScan" label="启用自动扫描" />
             <ProFormDigit name="scanIntervalMinutes" label="扫描间隔（分钟）" min={5} max={1440} />
-            <ProFormList name="paths" label="媒体库目录" creatorButtonProps={{ creatorButtonText: '添加目录' }}>
-              <ProForm.Item name="path" rules={[{ required: true, message: '请输入目录路径' }]}>
+            <ProFormList
+              name="paths"
+              label="媒体库目录"
+              creatorButtonProps={{ creatorButtonText: '添加目录' }}
+              rules={PATH_LIST_RULES}
+            >
+              <ProForm.Item name="path" rules={[{ required: true, whitespace: true, message: '请输入目录路径' }]}>
                 <DirectoryInput />
               </ProForm.Item>
             </ProFormList>
@@ -209,15 +275,25 @@ const LibraryCreate: React.FC = () => {
       />
       <Card>
         <ProForm<LibraryFormValues>
+          formRef={formRef}
           submitter={false}
           preserve
-          onValuesChange={(_, allValues) => setFormValues({ ...DEFAULT_VALUES, ...allValues })}
+          onValuesChange={syncLatestFormValues}
           initialValues={DEFAULT_VALUES}
         >
           {step === 0 ? (
             <>
-              <ProFormText name="name" label="媒体库名称" rules={[{ required: true }]} />
-              <ProFormSelect name="type" label="类型" options={TYPE_OPTIONS} rules={[{ required: true }]} />
+              <ProFormText
+                name="name"
+                label="媒体库名称"
+                rules={[{ required: true, whitespace: true, message: '请填写媒体库名称' }]}
+              />
+              <ProFormSelect
+                name="type"
+                label="类型"
+                options={TYPE_OPTIONS}
+                rules={[{ required: true, message: '请选择媒体库类型' }]}
+              />
               <ProFormSelect name="language" label="元数据语言" options={LANGUAGE_OPTIONS} />
               <ProFormSwitch name="autoScan" label="启用自动扫描" />
               <ProFormDigit name="scanIntervalMinutes" label="扫描间隔（分钟）" min={5} max={1440} />
@@ -228,9 +304,9 @@ const LibraryCreate: React.FC = () => {
               name="paths"
               label="媒体库目录"
               creatorButtonProps={{ creatorButtonText: '添加目录' }}
-              rules={[{ required: true, message: '至少添加一个目录' }]}
+              rules={PATH_LIST_RULES}
             >
-              <ProForm.Item name="path" rules={[{ required: true, message: '请输入目录路径' }]}>
+              <ProForm.Item name="path" rules={[{ required: true, whitespace: true, message: '请输入目录路径' }]}>
                 <DirectoryInput />
               </ProForm.Item>
             </ProFormList>
@@ -261,26 +337,19 @@ const LibraryCreate: React.FC = () => {
             </>
           ) : null}
         </ProForm>
-        <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between' }}>
-          <Button disabled={step === 0} onClick={() => setStep((current) => current - 1)}>
+        <div className="library-form-actions">
+          <Button
+            disabled={step === 0}
+            onClick={() => {
+              syncLatestFormValues();
+              setStep((current) => current - 1);
+            }}
+          >
             上一步
           </Button>
           <Space>
             {step < 2 ? (
-              <Button
-                type="primary"
-                onClick={() => {
-                  if (step === 0 && !formValues.name?.trim()) {
-                    message.warning('请填写媒体库名称');
-                    return;
-                  }
-                  if (step === 1 && normalizePaths(formValues.paths).length === 0) {
-                    message.warning('请至少添加一个有效目录');
-                    return;
-                  }
-                  setStep((current) => current + 1);
-                }}
-              >
+              <Button type="primary" onClick={handleNext}>
                 下一步
               </Button>
             ) : (

@@ -36,13 +36,10 @@ ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
     NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=5000 \
     NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=30000 \
     NPM_CONFIG_PREFER_OFFLINE=true
-RUN --mount=type=cache,id=mediamanager-node-modules,target=/app/node_modules \
-    --mount=type=cache,id=mediamanager-npm-cache,target=/root/.npm \
+RUN --mount=type=cache,id=mediamanager-npm-cache,target=/root/.npm \
     npm ci --ignore-scripts --prefer-offline --no-audit --no-fund
 COPY media-manager-web/ .
-RUN --mount=type=cache,id=mediamanager-node-modules,target=/app/node_modules \
-    --mount=type=cache,id=mediamanager-npm-cache,target=/root/.npm \
-    npm run build
+RUN npm run build
 
 # ---------- 国内镜像：Debian/Ubuntu apt（Maven 阶段若需 apt）----------
 FROM ${MAVEN_IMAGE} AS backend-builder

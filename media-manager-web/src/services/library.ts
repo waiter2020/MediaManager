@@ -42,6 +42,10 @@ export async function triggerScan(id: number) {
   return request<ApiResponse<void>>(`/api/v1/libraries/${id}/scan`, { method: 'POST' });
 }
 
+export async function cancelScan(id: number) {
+  return request<ApiResponse<void>>(`/api/v1/system/scan/${id}/cancel`, { method: 'POST' });
+}
+
 export async function updateLibrary(id: number, data: Partial<LibraryUpsertPayload>) {
   return request<ApiResponse<MediaLibrary>>(`/api/v1/libraries/${id}`, { method: 'PUT', data });
 }
@@ -49,4 +53,3 @@ export async function updateLibrary(id: number, data: Partial<LibraryUpsertPaylo
 export async function getLibraryStats(id: number) {
   return request<ApiResponse<LibraryStats>>(`/api/v1/libraries/${id}/stats`, { method: 'GET' });
 }
-

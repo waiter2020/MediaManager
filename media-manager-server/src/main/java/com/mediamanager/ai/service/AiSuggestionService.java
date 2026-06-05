@@ -2,11 +2,12 @@ package com.mediamanager.ai.service;
 
 import com.mediamanager.ai.entity.AiSuggestion;
 import com.mediamanager.ai.repository.AiSuggestionRepository;
+import com.mediamanager.classification.service.TagColorService;
+import com.mediamanager.classification.service.TagCanonicalizationService;
+import com.mediamanager.classification.service.TagQualityService;
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
 import com.mediamanager.media.entity.MediaItem;
-import com.mediamanager.classification.entity.Tag;
-import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.service.MediaPostProcessService;
 import com.mediamanager.system.service.LibraryAccessService;
@@ -16,6 +17,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -32,7 +34,9 @@ public class AiSuggestionService {
 
     private final AiSuggestionRepository suggestionRepository;
     private final MediaItemRepository itemRepository;
-    private final TagRepository tagRepository;
+    private final TagCanonicalizationService tagCanonicalizationService;
+    private final TagQualityService tagQualityService;
+    private final TagColorService tagColorService;
     private final MediaPostProcessService mediaPostProcessService;
     private final LibraryAccessService libraryAccessService;
     private final NfoExportService nfoExportService;
@@ -41,14 +45,18 @@ public class AiSuggestionService {
     public AiSuggestionService(
             AiSuggestionRepository suggestionRepository,
             MediaItemRepository itemRepository,
-            TagRepository tagRepository,
+            TagCanonicalizationService tagCanonicalizationService,
+            TagQualityService tagQualityService,
+            TagColorService tagColorService,
             @Lazy MediaPostProcessService mediaPostProcessService,
             LibraryAccessService libraryAccessService,
             NfoExportService nfoExportService,
             SysConfigService sysConfigService) {
         this.suggestionRepository = suggestionRepository;
         this.itemRepository = itemRepository;
-        this.tagRepository = tagRepository;
+        this.tagCanonicalizationService = tagCanonicalizationService;
+        this.tagQualityService = tagQualityService;
+        this.tagColorService = tagColorService;
         this.mediaPostProcessService = mediaPostProcessService;
         this.libraryAccessService = libraryAccessService;
         this.nfoExportService = nfoExportService;
@@ -116,18 +124,12 @@ public class AiSuggestionService {
             if (suggestion.getSuggestedValue() != null && !suggestion.getSuggestedValue().isBlank()) {
                 resolvedTagName = suggestion.getSuggestedValue();
             }
-            final String tagName = resolvedTagName;
-            Tag tag = tagRepository.findByName(tagName).orElseGet(() -> {
-                Tag created = new Tag();
-                created.setName(tagName);
-                created.setSource("AI");
-                created.setColor("#8b5cf6");
-                return tagRepository.save(created);
-            });
-            if (!item.getTags().contains(tag)) {
-                item.getTags().add(tag);
-                itemRepository.save(item);
-            }
+            tagCanonicalizationService.findOrCreateTag(resolvedTagName, "AI", tagColorService.colorFor(resolvedTagName))
+                    .ifPresent(tag -> {
+                        if (tagCanonicalizationService.addCanonicalTag(item, tag)) {
+                            itemRepository.save(item);
+                        }
+                    });
         }
         suggestion.setReviewStatus("APPROVED");
         suggestion.setReviewedBy(reviewerId);
@@ -188,12 +190,41 @@ public class AiSuggestionService {
         return count;
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void createSuggestion(MediaItem item, String field, String value, String providerId, float confidence) {
+        if (item == null || item.getId() == null) {
+            return;
+        }
+        Integer itemId = item.getId();
+        String normalizedField = field;
+        String normalizedValue = value;
+        MediaItem attachedItem;
+        if (isTagField(field)) {
+            String tagName = tagNameFrom(field, value);
+            String normalizedTagName = tagCanonicalizationService.normalizeDisplayName(tagName);
+            if (normalizedTagName.isBlank() || !tagQualityService.isAcceptableAiTag(normalizedTagName)) {
+                return;
+            }
+            // AI classification already resolves against the existing-tag map.
+            // Defer database canonicalization until approval so generating a
+            // suggestion never scans or mutates the tag table.
+            normalizedValue = normalizedTagName;
+            normalizedField = tagFieldName(normalizedValue);
+            attachedItem = itemRepository.findByIdWithClassificationGraph(itemId).orElse(null);
+            if (attachedItem == null || tagCanonicalizationService.itemHasEquivalentTag(attachedItem, normalizedValue)) {
+                return;
+            }
+            if (suggestionRepository.existsByMediaItem_IdAndFieldNameAndSuggestedValueAndReviewStatus(
+                    itemId, normalizedField, normalizedValue, "PENDING")) {
+                return;
+            }
+        } else {
+            attachedItem = itemRepository.getReferenceById(itemId);
+        }
         AiSuggestion suggestion = AiSuggestion.builder()
-                .mediaItem(item)
-                .fieldName(field)
-                .suggestedValue(value)
+                .mediaItem(attachedItem)
+                .fieldName(normalizedField)
+                .suggestedValue(normalizedValue)
                 .providerId(providerId)
                 .confidence(confidence)
                 .reviewStatus("PENDING")
@@ -202,8 +233,9 @@ public class AiSuggestionService {
         
         suggestion = suggestionRepository.save(suggestion);
 
-        if (shouldAutoApprove(field, confidence)) {
-            log.info("Auto-approving AI suggestion for item {} field {} with confidence {}", item.getId(), field, confidence);
+        if (shouldAutoApprove(normalizedField, confidence)) {
+            log.info("Auto-approving AI suggestion for item {} field {} with confidence {}",
+                    attachedItem.getId(), normalizedField, confidence);
             try {
                 approve(suggestion.getId(), 0); // 0 representing AI System reviewer
             } catch (Exception e) {
@@ -213,6 +245,9 @@ public class AiSuggestionService {
     }
 
     private boolean shouldAutoApprove(String field, float confidence) {
+        if (field == null || field.isBlank()) {
+            return false;
+        }
         boolean enabled = sysConfigService.getBoolean("ai.auto_approve.enabled", false);
         if (!enabled) {
             return false;
@@ -254,6 +289,26 @@ public class AiSuggestionService {
             }
         }
         return false;
+    }
+
+    private boolean isTagField(String field) {
+        return field != null && field.startsWith("tag:");
+    }
+
+    private String tagNameFrom(String field, String value) {
+        if (value != null && !value.isBlank()) {
+            return value;
+        }
+        return field != null && field.length() > 4 ? field.substring(4) : "";
+    }
+
+    private String tagFieldName(String tagName) {
+        String normalized = tagCanonicalizationService.normalizeDisplayName(tagName);
+        int maxNameLength = 60;
+        if (normalized.length() > maxNameLength) {
+            normalized = normalized.substring(0, maxNameLength).strip();
+        }
+        return "tag:" + normalized;
     }
 
     private Map<String, Object> toMap(AiSuggestion s) {

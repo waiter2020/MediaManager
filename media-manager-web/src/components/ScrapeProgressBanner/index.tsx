@@ -20,9 +20,10 @@ const ScrapeProgressBanner: React.FC = () => {
     <div style={{ marginBottom: 12 }}>
       {active.map((task) => {
         const total = task.total != null ? Number(task.total) : (task.scraped ?? 0) + (task.errors ?? 0);
+        const processed = (task.scraped ?? 0) + (task.errors ?? 0);
         const percent =
-          task.scraped != null && total > 0
-            ? Math.min(100, Math.round(((task.scraped ?? 0) / total) * 100))
+          processed > 0 && total > 0
+            ? Math.min(100, Math.round((processed / total) * 100))
             : undefined;
         return (
           <Alert
@@ -42,7 +43,7 @@ const ScrapeProgressBanner: React.FC = () => {
                 percent={percent}
                 size="small"
                 status="active"
-                format={() => `已处理 ${task.scraped ?? 0} / 错误 ${task.errors ?? 0}`}
+                format={() => `成功 ${task.scraped ?? 0} / 错误 ${task.errors ?? 0}`}
               />
             }
           />

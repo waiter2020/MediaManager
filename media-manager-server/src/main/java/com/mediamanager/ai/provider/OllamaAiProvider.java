@@ -16,7 +16,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class OllamaAiProvider implements AiProvider {
 
-    private final RestTemplate restTemplate;
+    private final AiHttpClientFactory httpClientFactory;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -41,13 +41,14 @@ public class OllamaAiProvider implements AiProvider {
     public float[] embedText(String text, Map<String, Object> config) {
         String baseUrl = str(config, "baseUrl", "http://localhost:11434");
         String model = str(config, "embedModel", "nomic-embed-text");
-        long timeoutMs = longVal(config, "timeoutMs", 60000L);
+        long timeoutMs = longVal(config, "timeoutMs", AiHttpClientFactory.DEFAULT_TIMEOUT_MS);
+        RestTemplate requestClient = httpClientFactory.create(timeoutMs);
         log.debug("Ollama embed request: model={}, timeoutMs={}", model, timeoutMs);
 
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 Map<String, Object> body = Map.of("model", model, "prompt", text);
-                String resp = restTemplate.postForObject(baseUrl + "/api/embeddings", body, String.class);
+                String resp = requestClient.postForObject(baseUrl + "/api/embeddings", body, String.class);
                 JsonNode node = objectMapper.readTree(resp);
                 JsonNode embedding = node.path("embedding");
                 if (!embedding.isArray()) {
@@ -65,7 +66,8 @@ public class OllamaAiProvider implements AiProvider {
                             attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
                     sleepQuietly(backoff);
                 } else {
-                    log.warn("Ollama embed failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                    log.warn("Ollama embed failed after {} attempts (model={}, timeoutMs={}): {}",
+                            MAX_RETRIES + 1, model, timeoutMs, e.getMessage());
                 }
             }
         }
@@ -128,7 +130,8 @@ public class OllamaAiProvider implements AiProvider {
     private Optional<String> chat(String prompt, Map<String, Object> config) {
         String baseUrl = str(config, "baseUrl", "http://localhost:11434");
         String model = str(config, "llmModel", "qwen2.5:7b");
-        long timeoutMs = longVal(config, "timeoutMs", 60000L);
+        long timeoutMs = longVal(config, "timeoutMs", AiHttpClientFactory.DEFAULT_TIMEOUT_MS);
+        RestTemplate requestClient = httpClientFactory.create(timeoutMs);
         log.debug("Ollama chat request: model={}, timeoutMs={}", model, timeoutMs);
 
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -137,7 +140,7 @@ public class OllamaAiProvider implements AiProvider {
                         "model", model,
                         "prompt", prompt,
                         "stream", false);
-                String resp = restTemplate.postForObject(baseUrl + "/api/generate", body, String.class);
+                String resp = requestClient.postForObject(baseUrl + "/api/generate", body, String.class);
                 JsonNode node = objectMapper.readTree(resp);
                 return Optional.ofNullable(node.path("response").asText(null));
             } catch (Exception e) {
@@ -147,7 +150,8 @@ public class OllamaAiProvider implements AiProvider {
                             attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
                     sleepQuietly(backoff);
                 } else {
-                    log.warn("Ollama chat failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                    log.warn("Ollama chat failed after {} attempts (model={}, timeoutMs={}): {}",
+                            MAX_RETRIES + 1, model, timeoutMs, e.getMessage());
                 }
             }
         }

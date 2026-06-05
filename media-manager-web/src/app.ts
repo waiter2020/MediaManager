@@ -46,6 +46,7 @@ export const layout: RunTimeLayoutConfig = ({ initialState }) => {
       locale: false,
     },
     layout: 'side',
+    breakpoint: 'lg',
     fixSiderbar: true,
     siderWidth: 220,
     contentWidth: 'Fluid',

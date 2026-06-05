@@ -5,7 +5,9 @@ import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.media.service.LocalArtworkService;
 import com.mediamanager.media.service.MediaPostProcessService;
+import com.mediamanager.media.service.MediaSubtitleService;
 import com.mediamanager.metadata.service.MetadataApplyService;
 import com.mediamanager.metadata.service.MetadataPipelineService;
 import com.mediamanager.metadata.spi.MetadataResult;
@@ -15,6 +17,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -33,6 +37,8 @@ public class FileScanProcessor {
     private final MetadataApplyService metadataApplyService;
     private final FileNameParser fileNameParser;
     private final MediaPostProcessService mediaPostProcessService;
+    private final MediaSubtitleService mediaSubtitleService;
+    private final LocalArtworkService localArtworkService;
 
     public enum ScanOutcome {
         SKIPPED(false),
@@ -53,6 +59,24 @@ public class FileScanProcessor {
         }
     }
 
+    public record ScanResult(ScanOutcome outcome, String errorMessage) {
+        public static ScanResult of(ScanOutcome outcome) {
+            return new ScanResult(outcome, null);
+        }
+
+        public static ScanResult failed(Throwable error) {
+            return new ScanResult(ScanOutcome.FAILED, describeError(error));
+        }
+
+        public static ScanResult failed(String errorMessage) {
+            return new ScanResult(ScanOutcome.FAILED, errorMessage);
+        }
+
+        public boolean matchedMediaFile() {
+            return outcome.matchedMediaFile();
+        }
+    }
+
     private static final Set<String> VIDEO_EXTENSIONS = Set.of(
             "3gp", "asf", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4",
             "mpg", "mpeg", "mts", "ogv", "ts", "vob", "webm", "wmv"
@@ -68,12 +92,19 @@ public class FileScanProcessor {
             "jpeg", "png", "tif", "tiff", "webp"
     );
 
-    public ScanOutcome scanFile(MediaLibrary library, Path file, BasicFileAttributes attrs) {
+    @Transactional
+    public ScanResult scanFile(MediaLibrary library, Path file, BasicFileAttributes attrs) {
         String fileName = file.getFileName().toString();
         String extension = getExtension(fileName).toLowerCase();
         String mediaType = determineMediaType(library.getType(), extension);
         if (mediaType == null) {
-            return ScanOutcome.SKIPPED;
+            if (mediaSubtitleService.tryAttachSubtitleFile(file, attrs)) {
+                return ScanResult.of(ScanOutcome.UPDATED);
+            }
+            if (localArtworkService.tryAttachArtworkFile(file)) {
+                return ScanResult.of(ScanOutcome.UPDATED);
+            }
+            return ScanResult.of(ScanOutcome.SKIPPED);
         }
 
         String filePath = normalizePath(file.toAbsolutePath().toString());
@@ -83,20 +114,21 @@ public class FileScanProcessor {
                 existing.getMediaItem().setLastScannedAt(Instant.now());
                 itemRepository.save(existing.getMediaItem());
             }
-            return ScanOutcome.UNCHANGED;
+            return ScanResult.of(ScanOutcome.UNCHANGED);
         }
 
         try {
             processFile(library, file, attrs, mediaType);
             if (existing == null) {
-                return ScanOutcome.CREATED;
+                return ScanResult.of(ScanOutcome.CREATED);
             }
-            return Boolean.TRUE.equals(existing.getDeleted())
+            ScanOutcome outcome = Boolean.TRUE.equals(existing.getDeleted())
                     ? ScanOutcome.RESTORED
                     : ScanOutcome.UPDATED;
+            return ScanResult.of(outcome);
         } catch (Exception e) {
             log.error("Failed to scan media file: {}", filePath, e);
-            return ScanOutcome.FAILED;
+            return ScanResult.failed(e);
         }
     }
 
@@ -131,7 +163,9 @@ public class FileScanProcessor {
             MetadataResult pipelineResult = pipelineService.executeLocalPipeline(item, mediaFile);
             pipelineResult.mergeFrom(fileNameResult);
             metadataApplyService.applyResult(item, pipelineResult, mediaFile);
-            mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
+            localArtworkService.applyLocalArtwork(item, mediaFile, file);
+            mediaSubtitleService.syncLocalSubtitles(item, mediaFile, file);
+            enqueuePostProcessAfterCommit(item.getId());
             log.info("Successfully processed item: {}", item.getTitle());
         } catch (Exception e) {
             log.error("Error during metadata extraction for file: {}", filePath, e);
@@ -233,5 +267,32 @@ public class FileScanProcessor {
 
     private String normalizePath(String path) {
         return path == null ? null : path.replace('\\', '/');
+    }
+
+    private void enqueuePostProcessAfterCommit(Integer itemId) {
+        if (itemId == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            mediaPostProcessService.afterMetadataUpdatedAsync(itemId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                mediaPostProcessService.afterMetadataUpdatedAsync(itemId);
+            }
+        });
+    }
+
+    private static String describeError(Throwable error) {
+        if (error == null) {
+            return "Unknown scan error";
+        }
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return error.getClass().getSimpleName() + ": " + message;
     }
 }

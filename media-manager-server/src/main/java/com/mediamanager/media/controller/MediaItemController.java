@@ -5,9 +5,13 @@ import com.mediamanager.common.response.PageResult;
 import com.mediamanager.media.dto.ClassifyBatchRequest;
 import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.dto.MediaItemDetailResponse;
+import com.mediamanager.media.dto.MediaSubtitleDto;
+import com.mediamanager.media.dto.SubtitleSearchResultDto;
 import com.mediamanager.metadata.dto.IdentifyRequest;
 import com.mediamanager.metadata.dto.SeasonDto;
 import com.mediamanager.media.service.MediaItemService;
+import com.mediamanager.media.service.MediaChapterService;
+import com.mediamanager.media.service.MediaSubtitleService;
 import com.mediamanager.search.dto.SemanticSearchResult;
 import com.mediamanager.search.service.SearchService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,6 +35,8 @@ import java.util.Set;
 public class MediaItemController {
 
     private final MediaItemService itemService;
+    private final MediaChapterService chapterService;
+    private final MediaSubtitleService subtitleService;
     private final SearchService searchService;
 
     @GetMapping
@@ -73,6 +79,30 @@ public class MediaItemController {
     @Operation(summary = "Get TV show seasons and episodes")
     public ApiResponse<List<SeasonDto>> getItemSeasons(@PathVariable Integer id) {
         return ApiResponse.success(itemService.getItemSeasons(id));
+    }
+
+    @GetMapping("/{id}/subtitles")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Get subtitles attached to a media item")
+    public ApiResponse<List<MediaSubtitleDto>> getItemSubtitles(@PathVariable Integer id) {
+        return ApiResponse.success(subtitleService.getSubtitlesForItem(id));
+    }
+
+    @GetMapping("/chapters/{chapterId}/thumbnail")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Get a generated video chapter thumbnail")
+    public ResponseEntity<Resource> getChapterThumbnail(@PathVariable Integer chapterId) {
+        return chapterService.getChapterThumbnail(chapterId);
+    }
+
+    @GetMapping("/{id}/subtitles/search")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Search online subtitle candidates")
+    public ApiResponse<List<SubtitleSearchResultDto>> searchOnlineSubtitles(
+            @PathVariable Integer id,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String language) {
+        return ApiResponse.success(subtitleService.searchOnlineSubtitles(id, q, language));
     }
 
     @PostMapping("/{id}/seasons/sync")
@@ -202,12 +232,5 @@ public class MediaItemController {
     @Operation(summary = "Get backdrop image")
     public ResponseEntity<Resource> getBackdrop(@PathVariable Integer id) throws IOException {
         return itemService.getImage(id, "backdrop");
-    }
-
-    @GetMapping("/{id}/preview")
-    @PreAuthorize("hasAuthority('media:view')")
-    @Operation(summary = "Get animated WebP preview image")
-    public ResponseEntity<Resource> getPreview(@PathVariable Integer id) throws IOException {
-        return itemService.getPreviewImage(id);
     }
 }

@@ -8,11 +8,15 @@ import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.service.MediaPostProcessService;
+import com.mediamanager.metadata.dto.ScrapeTaskCreateRequest;
+import com.mediamanager.metadata.dto.ScrapeTaskPreviewResponse;
 import com.mediamanager.metadata.dto.ScrapeTaskResponse;
 import com.mediamanager.metadata.entity.ScrapeTask;
 import com.mediamanager.metadata.repository.ScrapeTaskRepository;
 import com.mediamanager.metadata.spi.MetadataResult;
 import com.mediamanager.metadata.util.FileNameParser;
+import com.mediamanager.plugin.PluginKind;
+import com.mediamanager.plugin.repository.LibraryPluginConfigRepository;
 import com.mediamanager.sync.service.SseService;
 import com.mediamanager.system.dto.SystemLogEventDto;
 import com.mediamanager.system.service.LibraryAccessService;
@@ -30,6 +34,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -58,6 +64,7 @@ public class ScrapeTaskService {
     private final LibraryAccessService libraryAccessService;
     private final SecurityCurrentUser securityCurrentUser;
     private final TransactionTemplate transactionTemplate;
+    private final LibraryPluginConfigRepository pluginConfigRepository;
 
     @Value("${mediamanager.scraper.request-delay-ms:2000}")
     private long requestDelayMs;
@@ -73,6 +80,7 @@ public class ScrapeTaskService {
     private final ExecutorService scrapeExecutor = Executors.newFixedThreadPool(2);
 
     private static final Set<String> TERMINAL_STATUSES = Set.of("SUCCESS", "FAILED", "CANCELLED");
+    private static final Set<String> VALID_MEDIA_TYPES = Set.of("MOVIE", "TV_SHOW", "EPISODE", "IMAGE", "AUDIO");
 
     @PreDestroy
     public void shutdown() {
@@ -116,6 +124,51 @@ public class ScrapeTaskService {
     @Transactional
     public ScrapeTaskResponse startScrape(Integer libraryId, String triggerType, String targetStatus) {
         return startScrapeWithParams(null, libraryId, triggerType, targetStatus, null, null);
+    }
+
+    public ScrapeTaskResponse startManualScrape(ScrapeTaskCreateRequest request) {
+        ScrapeTaskCreateRequest safe = request != null ? request : new ScrapeTaskCreateRequest();
+        String mediaTypesJson = buildMediaTypesJson(safe.getMediaTypes());
+        String paramsJson = buildManualParamsJson(safe.getRequestDelayMs(), safe.getBatchSize());
+        return startScrapeWithParams(
+                null,
+                safe.getLibraryId(),
+                "MANUAL",
+                safe.getTargetStatus() != null ? safe.getTargetStatus() : "UNIDENTIFIED",
+                mediaTypesJson,
+                paramsJson);
+    }
+
+    @Transactional(readOnly = true)
+    public ScrapeTaskPreviewResponse previewManualScrape(ScrapeTaskCreateRequest request) {
+        ScrapeTaskCreateRequest safe = request != null ? request : new ScrapeTaskCreateRequest();
+        Integer libraryId = safe.getLibraryId();
+        String targetStatus = safe.getTargetStatus() != null ? safe.getTargetStatus() : "UNIDENTIFIED";
+        String mediaTypesJson = buildMediaTypesJson(safe.getMediaTypes());
+        Set<String> mediaTypes = parseMediaTypes(mediaTypesJson);
+
+        List<MediaItem> scopeItems = findVisibleItemsByScope(libraryId);
+        List<MediaItem> statusItems = filterByTargetStatus(scopeItems, targetStatus);
+        List<MediaItem> eligibleItems = filterByMediaTypes(statusItems, mediaTypes);
+
+        MediaLibrary library = libraryId != null
+                ? libraryRepository.findById(libraryId).orElse(null)
+                : null;
+        List<String> enabledScrapers = enabledScrapers(libraryId);
+        List<String> tips = buildPreviewTips(targetStatus, mediaTypes, scopeItems, statusItems, eligibleItems, enabledScrapers);
+
+        return ScrapeTaskPreviewResponse.builder()
+                .libraryId(libraryId)
+                .libraryName(library != null ? library.getName() : null)
+                .targetStatus(targetStatus)
+                .mediaTypes(mediaTypes.stream().toList())
+                .totalItems(eligibleItems.size())
+                .allVisibleItems(scopeItems.size())
+                .byStatus(countBy(scopeItems, MediaItem::getStatus))
+                .byType(countBy(statusItems, MediaItem::getType))
+                .enabledScrapers(enabledScrapers)
+                .tips(tips)
+                .build();
     }
 
     /**
@@ -342,18 +395,19 @@ public class ScrapeTaskService {
     // ── Item-level scraping ─────────────────────────────────
 
     private void scrapeItem(MediaItem item) {
-        transactionTemplate.executeWithoutResult(status -> {
-            List<MediaFile> files = mediaFileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
-            MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
+        if (item == null || item.getId() == null) {
+            return;
+        }
+        List<MediaFile> files = mediaFileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
+        MediaFile primaryFile = files.isEmpty() ? null : files.get(0);
 
-            MetadataResult pipelineResult = pipelineService.executeScrapePipeline(item, primaryFile);
-            if (pipelineResult.getTitle() == null && primaryFile != null) {
-                MetadataResult fallback = fileNameParser.parse(primaryFile.getFileName());
-                pipelineResult.mergeFrom(fallback);
-            }
-            metadataApplyService.applyResult(item, pipelineResult, primaryFile);
-            mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
-        });
+        MetadataResult pipelineResult = pipelineService.executeScrapePipeline(item, primaryFile);
+        if (pipelineResult.getTitle() == null && primaryFile != null) {
+            MetadataResult fallback = fileNameParser.parse(primaryFile.getFileName());
+            pipelineResult.mergeFrom(fallback);
+        }
+        metadataApplyService.applyResult(item.getId(), pipelineResult, primaryFile != null ? primaryFile.getId() : null);
+        mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
     }
 
     private boolean isTaskCancelled(Integer taskId) {
@@ -412,29 +466,36 @@ public class ScrapeTaskService {
     // ── Helpers ──────────────────────────────────────────────
 
     private List<MediaItem> findItemsByTarget(Integer libraryId, String targetStatus, String mediaTypesJson) {
+        Set<String> mediaTypes = parseMediaTypes(mediaTypesJson);
+        return filterByMediaTypes(filterByTargetStatus(findVisibleItemsByScope(libraryId), targetStatus), mediaTypes);
+    }
+
+    private List<MediaItem> findVisibleItemsByScope(Integer libraryId) {
         Set<Integer> viewableLibraries = libraryAccessService.resolveLibraryFilter(libraryId);
         if (viewableLibraries.isEmpty()) {
             return List.of();
         }
-        Set<String> mediaTypes = parseMediaTypes(mediaTypesJson);
-
-        if ("ALL".equalsIgnoreCase(targetStatus)) {
-            List<MediaItem> items = (libraryId != null)
-                    ? mediaItemRepository.findByLibraryIdOrderByIdAsc(libraryId)
-                    : mediaItemRepository.findAllByOrderByIdAsc();
-            return filterByViewableLibraries(filterByMediaTypes(items, mediaTypes), viewableLibraries);
-        }
-        // UNIDENTIFIED or IDENTIFIED
         List<MediaItem> items = (libraryId != null)
-                ? mediaItemRepository.findByLibraryIdAndStatusOrderByIdAsc(libraryId, targetStatus)
-                : mediaItemRepository.findByStatusOrderByIdAsc(targetStatus);
-        return filterByViewableLibraries(filterByMediaTypes(items, mediaTypes), viewableLibraries);
-    }
-
-    private List<MediaItem> filterByViewableLibraries(List<MediaItem> items, Set<Integer> viewableLibraries) {
+                ? mediaItemRepository.findByLibraryIdOrderByIdAsc(libraryId)
+                : mediaItemRepository.findAllByOrderByIdAsc();
         return items.stream()
+                .filter(this::isVisible)
                 .filter(i -> i.getLibrary() != null && viewableLibraries.contains(i.getLibrary().getId()))
                 .collect(Collectors.toList());
+    }
+
+    private List<MediaItem> filterByTargetStatus(List<MediaItem> items, String targetStatus) {
+        if ("ALL".equalsIgnoreCase(targetStatus)) {
+            return items;
+        }
+        String effective = targetStatus != null ? targetStatus : "UNIDENTIFIED";
+        return items.stream()
+                .filter(item -> effective.equalsIgnoreCase(item.getStatus()))
+                .collect(Collectors.toList());
+    }
+
+    private boolean isVisible(MediaItem item) {
+        return item != null && !Boolean.TRUE.equals(item.getHidden());
     }
 
     private boolean canViewTask(ScrapeTask task) {
@@ -454,6 +515,12 @@ public class ScrapeTaskService {
     }
 
     private ScrapeTaskResponse toResponse(ScrapeTask task) {
+        ScrapeParams params = parseParams(task.getParamsJson());
+        int total = task.getTotalItems() != null ? task.getTotalItems() : 0;
+        int scraped = task.getScrapedItems() != null ? task.getScrapedItems() : 0;
+        int errors = task.getErrorItems() != null ? task.getErrorItems() : 0;
+        int processed = Math.min(total, scraped + errors);
+        int progressPercent = total > 0 ? (int) Math.round((processed * 100.0) / total) : 0;
         return ScrapeTaskResponse.builder()
                 .id(task.getId())
                 .scheduleId(task.getScheduleId())
@@ -463,6 +530,10 @@ public class ScrapeTaskService {
                 .triggerType(task.getTriggerType())
                 .targetStatus(task.getTargetStatus())
                 .mediaTypes(task.getMediaTypes())
+                .paramsJson(task.getParamsJson())
+                .requestDelayMs(params.requestDelayMs())
+                .batchSize(params.batchSize())
+                .progressPercent(progressPercent)
                 .totalItems(task.getTotalItems())
                 .scrapedItems(task.getScrapedItems())
                 .errorItems(task.getErrorItems())
@@ -482,6 +553,103 @@ public class ScrapeTaskService {
                 .collect(Collectors.toList());
     }
 
+    private Map<String, Integer> countBy(List<MediaItem> items, Function<MediaItem, String> classifier) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (MediaItem item : items) {
+            String key = classifier.apply(item);
+            if (key == null || key.isBlank()) {
+                key = "UNKNOWN";
+            }
+            result.merge(key, 1, Integer::sum);
+        }
+        return result;
+    }
+
+    private List<String> enabledScrapers(Integer libraryId) {
+        Set<Integer> viewableLibraries = libraryAccessService.resolveLibraryFilter(libraryId);
+        if (viewableLibraries.isEmpty()) {
+            return List.of();
+        }
+        List<Integer> libraryIds = libraryId != null ? List.of(libraryId) : viewableLibraries.stream().toList();
+        return libraryIds.stream()
+                .flatMap(id -> pluginConfigRepository.findByLibrary_IdOrderByPriorityAsc(id).stream())
+                .filter(config -> PluginKind.SCRAPER.name().equalsIgnoreCase(config.getKind()))
+                .filter(config -> Boolean.TRUE.equals(config.getEnabled()))
+                .map(config -> config.getPluginId() != null ? config.getPluginId().trim().toLowerCase() : "")
+                .filter(pluginId -> !pluginId.isBlank())
+                .distinct()
+                .toList();
+    }
+
+    private List<String> buildPreviewTips(
+            String targetStatus,
+            Set<String> mediaTypes,
+            List<MediaItem> scopeItems,
+            List<MediaItem> statusItems,
+            List<MediaItem> eligibleItems,
+            List<String> enabledScrapers) {
+        List<String> tips = new ArrayList<>();
+        if (scopeItems.isEmpty()) {
+            tips.add("当前范围没有可见媒体，请先扫描媒体库。");
+            return tips;
+        }
+        if (statusItems.isEmpty() && !"ALL".equalsIgnoreCase(targetStatus)) {
+            tips.add("当前范围没有 " + targetStatus + " 状态的媒体，可将目标状态改为 ALL。");
+        }
+        if (!statusItems.isEmpty() && eligibleItems.isEmpty() && mediaTypes != null && !mediaTypes.isEmpty()) {
+            tips.add("目标状态下没有选中媒体类型，可清空媒体类型筛选或选择已有类型。");
+        }
+        if (enabledScrapers == null || enabledScrapers.isEmpty()) {
+            tips.add("当前范围未发现启用的 SCRAPER，任务将无法拉取远程元数据。");
+        }
+        return tips;
+    }
+
+    private String buildMediaTypesJson(List<String> mediaTypes) {
+        if (mediaTypes == null || mediaTypes.isEmpty()) {
+            return null;
+        }
+        List<String> normalized = mediaTypes.stream()
+                .filter(type -> type != null && !type.isBlank())
+                .map(type -> type.trim().toUpperCase())
+                .distinct()
+                .toList();
+        for (String type : normalized) {
+            if (!VALID_MEDIA_TYPES.contains(type)) {
+                throw new com.mediamanager.common.exception.BusinessException(
+                        com.mediamanager.common.exception.ErrorCode.VALIDATION_ERROR,
+                        "Unsupported media type: " + type);
+            }
+        }
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(normalized);
+        } catch (Exception e) {
+            throw new com.mediamanager.common.exception.BusinessException(
+                    com.mediamanager.common.exception.ErrorCode.VALIDATION_ERROR,
+                    "Failed to serialize mediaTypes");
+        }
+    }
+
+    private String buildManualParamsJson(Long requestDelayMs, Integer batchSize) {
+        try {
+            Map<String, Object> params = new java.util.LinkedHashMap<>();
+            if (requestDelayMs != null) {
+                params.put("requestDelayMs", Math.max(0L, requestDelayMs));
+            }
+            if (batchSize != null) {
+                params.put("batchSize", Math.max(1, batchSize));
+            }
+            return params.isEmpty() ? null : objectMapper.writeValueAsString(params);
+        } catch (Exception e) {
+            throw new com.mediamanager.common.exception.BusinessException(
+                    com.mediamanager.common.exception.ErrorCode.VALIDATION_ERROR,
+                    "Failed to serialize scrape params");
+        }
+    }
+
     /**
      * Parse mediaTypes JSON array string into a set.
      * We keep this lightweight to avoid introducing new DTOs early; schedule APIs will validate inputs.
@@ -496,7 +664,7 @@ public class ScrapeTaskService {
             if (list == null || list.isEmpty()) return Set.of();
             return new HashSet<>(list.stream()
                     .filter(s -> s != null && !s.isBlank())
-                    .map(String::trim)
+                    .map(s -> s.trim().toUpperCase())
                     .collect(Collectors.toSet()));
         } catch (Exception e) {
             log.warn("Invalid mediaTypes JSON, ignoring filter: {}", mediaTypesJson, e);

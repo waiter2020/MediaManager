@@ -1,6 +1,7 @@
 import { history, Outlet, useAccess, useLocation } from '@umijs/max';
 import { Layout, Menu } from 'antd';
 import React, { useMemo } from 'react';
+import './layout.css';
 
 const { Sider, Content } = Layout;
 
@@ -47,25 +48,20 @@ const SettingsLayout: React.FC = () => {
   }
 
   return (
-    <Layout style={{ background: 'transparent', minHeight: 'calc(100vh - 120px)' }}>
+    <Layout className="settings-shell">
       <Sider
+        className="settings-nav"
         width={200}
-        style={{
-          background: '#141420',
-          borderRadius: 8,
-          border: '1px solid rgba(255,255,255,0.06)',
-          marginRight: 16,
-        }}
       >
         <Menu
+          className="settings-menu"
           mode="inline"
           selectedKeys={selectedKey ? [selectedKey] : []}
-          style={{ background: 'transparent', border: 'none' }}
           items={items.map((item) => ({ key: item.key, label: item.label }))}
           onClick={({ key }) => history.push(key)}
         />
       </Sider>
-      <Content style={{ flex: 1, minWidth: 0 }}>
+      <Content className="settings-content">
         <Outlet />
       </Content>
     </Layout>

@@ -14,11 +14,14 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -36,6 +39,7 @@ class StreamingIntegrationTest extends IntegrationTestSupport {
 
     private String token;
     private MediaFile mp4File;
+    private byte[] mp4Bytes;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -49,7 +53,8 @@ class StreamingIntegrationTest extends IntegrationTestSupport {
         token = bearerToken(user, Set.of("media:view", "media:play"));
 
         Path mediaPath = tempDir.resolve("sample.mp4");
-        Files.writeString(mediaPath, "fake-mp4-content-for-test");
+        mp4Bytes = "fake-mp4-content-for-test".getBytes(StandardCharsets.UTF_8);
+        Files.write(mediaPath, mp4Bytes);
 
         MediaLibrary lib = createLibrary("StreamLib");
         MediaItem item = createItem(lib, "Sample Movie");
@@ -57,7 +62,7 @@ class StreamingIntegrationTest extends IntegrationTestSupport {
                 .mediaItem(item)
                 .filePath(mediaPath.toString())
                 .fileName("sample.mp4")
-                .fileSize(32L)
+                .fileSize((long) mp4Bytes.length)
                 .container("mp4")
                 .mimeType("video/mp4")
                 .deleted(false)
@@ -72,5 +77,34 @@ class StreamingIntegrationTest extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.mode").value("direct"))
                 .andExpect(jsonPath("$.data.url").value("/api/v1/stream/raw/" + mp4File.getId()));
+    }
+
+    @Test
+    void streamWithoutRangeReturnsFullVideo() throws Exception {
+        mockMvc.perform(get("/api/v1/stream/" + mp4File.getId())
+                        .header("Authorization", token))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Accept-Ranges", "bytes"))
+                .andExpect(content().bytes(mp4Bytes));
+    }
+
+    @Test
+    void streamRangeReturnsPartialVideoBytes() throws Exception {
+        mockMvc.perform(get("/api/v1/stream/" + mp4File.getId())
+                        .header("Authorization", token)
+                        .header("Range", "bytes=5-11"))
+                .andExpect(status().isPartialContent())
+                .andExpect(header().string("Accept-Ranges", "bytes"))
+                .andExpect(header().string("Content-Range", "bytes 5-11/" + mp4Bytes.length))
+                .andExpect(content().bytes("mp4-con".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void streamRangeOutsideFileReturnsRequestedRangeNotSatisfiable() throws Exception {
+        mockMvc.perform(get("/api/v1/stream/" + mp4File.getId())
+                        .header("Authorization", token)
+                        .header("Range", "bytes=999-"))
+                .andExpect(status().isRequestedRangeNotSatisfiable())
+                .andExpect(header().string("Content-Range", "bytes */" + mp4Bytes.length));
     }
 }

@@ -1,6 +1,30 @@
 import { request } from '@umijs/max';
 import type { ApiResponse } from '@/types/api';
 
+export type ScrapeTargetStatus = 'UNIDENTIFIED' | 'IDENTIFIED' | 'ALL';
+export type ScrapeMediaType = 'MOVIE' | 'TV_SHOW' | 'EPISODE' | 'IMAGE' | 'AUDIO';
+
+export interface ScrapeTaskCreatePayload {
+  libraryId?: number;
+  targetStatus?: ScrapeTargetStatus;
+  mediaTypes?: ScrapeMediaType[];
+  requestDelayMs?: number;
+  batchSize?: number;
+}
+
+export interface ScrapeTaskPreviewResponse {
+  libraryId?: number;
+  libraryName?: string;
+  targetStatus?: ScrapeTargetStatus | string;
+  mediaTypes?: string[];
+  totalItems: number;
+  allVisibleItems: number;
+  byStatus?: Record<string, number>;
+  byType?: Record<string, number>;
+  enabledScrapers?: string[];
+  tips?: string[];
+}
+
 export interface ScrapeScheduleDto {
   id?: number;
   name: string;
@@ -32,6 +56,10 @@ export interface ScrapeTaskResponse {
   triggerType: string;
   targetStatus?: string;
   mediaTypes?: string;
+  paramsJson?: string;
+  requestDelayMs?: number;
+  batchSize?: number;
+  progressPercent?: number;
   totalItems: number;
   scrapedItems: number;
   errorItems: number;
@@ -77,11 +105,15 @@ export async function listScrapeTasks(params?: { scheduleId?: number }) {
   });
 }
 
-export async function createScrapeTask(data?: {
-  libraryId?: number;
-  targetStatus?: 'UNIDENTIFIED' | 'IDENTIFIED' | 'ALL';
-}) {
+export async function createScrapeTask(data?: ScrapeTaskCreatePayload) {
   return request<ApiResponse<ScrapeTaskResponse>>('/api/v1/scrape/tasks', {
+    method: 'POST',
+    data: data ?? {},
+  });
+}
+
+export async function previewScrapeTask(data?: ScrapeTaskCreatePayload) {
+  return request<ApiResponse<ScrapeTaskPreviewResponse>>('/api/v1/scrape/tasks/preview', {
     method: 'POST',
     data: data ?? {},
   });
@@ -101,16 +133,24 @@ export async function getScrapeTask(taskId: number) {
   });
 }
 
-export async function startScrapeAll(targetStatus?: string) {
+function normalizeScrapePayload(input?: ScrapeTargetStatus | ScrapeTaskCreatePayload) {
+  if (!input) return {};
+  return typeof input === 'string' ? { targetStatus: input } : input;
+}
+
+export async function startScrapeAll(input?: ScrapeTargetStatus | ScrapeTaskCreatePayload) {
   return request<ApiResponse<ScrapeTaskResponse | null>>('/api/v1/scrape/start', {
     method: 'POST',
-    data: targetStatus ? { targetStatus } : {},
+    data: normalizeScrapePayload(input),
   });
 }
 
-export async function startScrapeLibrary(libraryId: number, targetStatus?: string) {
+export async function startScrapeLibrary(
+  libraryId: number,
+  input?: ScrapeTargetStatus | ScrapeTaskCreatePayload,
+) {
   return request<ApiResponse<ScrapeTaskResponse | null>>(`/api/v1/scrape/start/${libraryId}`, {
     method: 'POST',
-    data: targetStatus ? { targetStatus } : {},
+    data: normalizeScrapePayload(input),
   });
 }

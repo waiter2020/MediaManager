@@ -17,6 +17,10 @@ public class ScrapeTaskResponse {
     private String triggerType;
     private String targetStatus;
     private String mediaTypes;
+    private String paramsJson;
+    private Long requestDelayMs;
+    private Integer batchSize;
+    private Integer progressPercent;
     private Integer totalItems;
     private Integer scrapedItems;
     private Integer errorItems;

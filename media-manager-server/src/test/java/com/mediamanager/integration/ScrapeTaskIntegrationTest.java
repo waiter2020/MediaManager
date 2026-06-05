@@ -76,4 +76,19 @@ class ScrapeTaskIntegrationTest extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
     }
+
+    @Test
+    void previewScrapeTaskExplainsCandidates() throws Exception {
+        String body = "{\"libraryId\":" + library.getId() + ",\"targetStatus\":\"UNIDENTIFIED\",\"mediaTypes\":[\"MOVIE\"]}";
+
+        mockMvc.perform(post("/api/v1/scrape/tasks/preview")
+                        .header("Authorization", token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.totalItems").value(1))
+                .andExpect(jsonPath("$.data.byStatus.UNIDENTIFIED").value(1))
+                .andExpect(jsonPath("$.data.byType.MOVIE").value(1));
+    }
 }

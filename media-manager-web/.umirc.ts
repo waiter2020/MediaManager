@@ -75,6 +75,13 @@ export default defineConfig({
       access: 'canViewMedia',
     },
     {
+      name: '合集',
+      path: '/collections',
+      component: './Collections',
+      icon: 'AppstoreAddOutlined',
+      access: 'canViewMedia',
+    },
+    {
       name: '媒体库',
       path: '/libraries',
       component: './Library/List',
@@ -90,7 +97,7 @@ export default defineConfig({
       access: 'canEditLibraryPlugins',
     },
     { path: '/media/:id', component: './Media/Detail', access: 'canViewMedia' },
-    { path: '/player/:id', component: './Media/Player', access: 'canPlayMedia' },
+    { path: '/player/:id', component: './Media/Player', access: 'canPlayMedia', layout: false },
     {
       name: '标签管理',
       path: '/classification/tags',

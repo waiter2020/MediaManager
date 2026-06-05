@@ -29,10 +29,12 @@ import { batchAddTags } from '@/services/classification';
 import { classifyBatch, getFilters, getItems, type CategoryFilter } from '@/services/media';
 import { getLibraries } from '@/services/library';
 import { searchUnified } from '@/services/search';
-import { resolveItemPosterUrl } from '@/services/stream';
+import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
 import EmptyState from '@/components/EmptyState';
 import MediaCard from '@/components/MediaCard';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
+import { openPlayerWindow } from '@/utils/playerWindow';
+import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaItem } from '@/types/media';
 import type { MediaLibrary } from '@/types/library';
 import './Browse.css';
@@ -66,6 +68,8 @@ const SORT_OPTIONS = [
   { label: '发行日期', value: 'releaseDate,desc' },
 ];
 
+const PREVIEWABLE_TYPES = new Set(['MOVIE', 'TV_SHOW', 'EPISODE']);
+
 function flattenCategories(nodes: CategoryFilter[] = [], result: FlatCategory[] = []): FlatCategory[] {
   nodes.forEach((node) => {
     result.push({ id: node.id, name: node.name, type: node.type });
@@ -74,6 +78,15 @@ function flattenCategories(nodes: CategoryFilter[] = [], result: FlatCategory[] 
     }
   });
   return result;
+}
+
+function parseNumberListParam(params: URLSearchParams, key: string): number[] {
+  const values = params
+    .getAll(key)
+    .flatMap((value) => value.split(','))
+    .map((value) => Number(value.trim()))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  return Array.from(new Set(values));
 }
 
 const MediaBrowse: React.FC = () => {
@@ -102,6 +115,8 @@ const MediaBrowse: React.FC = () => {
   const [batchTagIds, setBatchTagIds] = useState<number[]>([]);
   const [batchTagLoading, setBatchTagLoading] = useState(false);
   const [batchClassifyLoading, setBatchClassifyLoading] = useState(false);
+  const [listPreviewItemId, setListPreviewItemId] = useState<number | null>(null);
+  const [listPreviewVideoErrors, setListPreviewVideoErrors] = useState<Record<number, boolean>>({});
 
   const [allTags, setAllTags] = useState<TagOption[]>([]);
   const [categories, setCategories] = useState<FlatCategory[]>([]);
@@ -115,7 +130,11 @@ const MediaBrowse: React.FC = () => {
       if (!Number.isNaN(libId)) {
         setSelectedLibraryId(libId);
       }
+    } else {
+      setSelectedLibraryId(null);
     }
+    setSelectedTags(parseNumberListParam(params, 'tagIds'));
+    setSelectedCategories(parseNumberListParam(params, 'categoryIds'));
     const qParam = params.get('q') ?? params.get('query');
     if (qParam != null) {
       setSearchValue(qParam);
@@ -252,6 +271,16 @@ const MediaBrowse: React.FC = () => {
     } else {
       params.delete('libraryId');
     }
+    if (selectedTags.length > 0) {
+      params.set('tagIds', selectedTags.join(','));
+    } else {
+      params.delete('tagIds');
+    }
+    if (selectedCategories.length > 0) {
+      params.set('categoryIds', selectedCategories.join(','));
+    } else {
+      params.delete('categoryIds');
+    }
     const nextSearch = params.toString();
     history.replace(nextSearch ? `/browse?${nextSearch}` : '/browse');
   };
@@ -260,6 +289,12 @@ const MediaBrowse: React.FC = () => {
     setSelectedItemIds((prev) =>
       prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id],
     );
+  };
+
+  const openItemPlayer = (item: MediaItem) => {
+    if (!openPlayerWindow(item.id)) {
+      history.push(`/player/${item.id}`);
+    }
   };
 
   const handleBatchClassify = async () => {
@@ -339,7 +374,19 @@ const MediaBrowse: React.FC = () => {
             releaseDate={item.releaseDate}
             overview={item.overview}
             libraryName={item.libraryName}
+            tags={item.tags}
+            categories={item.categories}
+            playbackPercent={item.playbackPercent}
+            watched={item.watched}
+            favorited={item.favorited}
+            watchlisted={item.watchlisted}
+            previewMode="hover"
             onClick={() => history.push(`/media/${item.id}`)}
+            onPlay={
+              access.canPlayMedia && item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type)
+                ? () => openItemPlayer(item)
+                : undefined
+            }
           />
         </div>
       ))}
@@ -365,17 +412,46 @@ const MediaBrowse: React.FC = () => {
     <div className="media-list">
       {items.map((item) => {
         const listPosterUrl = getListPosterUrl(item);
+        const canPreview = PREVIEWABLE_TYPES.has(item.type);
+        const previewVideoUrl = item.fileIds?.length ? getFileStreamUrl(item.fileIds[0]) : null;
+        const isPreviewActive = listPreviewItemId === item.id;
+        const showVideoPreview =
+          canPreview && isPreviewActive && !!previewVideoUrl && !listPreviewVideoErrors[item.id];
         return (
           <div
             key={item.id}
             className="media-list-item"
             onClick={() => history.push(`/media/${item.id}`)}
+            onMouseEnter={() => setListPreviewItemId(item.id)}
+            onMouseLeave={() => setListPreviewItemId((current) => (current === item.id ? null : current))}
           >
             <div className="media-list-poster">
               {listPosterUrl ? (
-                <img src={listPosterUrl} alt={item.title} />
+                <img className="media-list-poster-image" src={listPosterUrl} alt={item.title} />
               ) : (
                 <div className="media-list-poster-placeholder">{getPlaceholderIcon(item.type)}</div>
+              )}
+              {showVideoPreview && (
+                <video
+                  className="media-list-preview-video"
+                  src={previewVideoUrl || undefined}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  onLoadedMetadata={(event) => {
+                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
+                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
+                    });
+                  }}
+                  onEnded={(event) => {
+                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
+                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
+                    });
+                  }}
+                  onError={() => {
+                    setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
+                  }}
+                />
               )}
             </div>
             <div className="media-list-info">

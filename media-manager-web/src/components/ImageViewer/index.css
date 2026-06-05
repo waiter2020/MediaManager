@@ -119,3 +119,40 @@
 .image-viewer-image:active {
   cursor: grabbing;
 }
+
+@media (max-width: 640px) {
+  .image-viewer-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .image-viewer-toolbar-divider,
+  .image-viewer-dimensions {
+    display: none;
+  }
+
+  .image-viewer-title {
+    order: 3;
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .image-viewer-close {
+    margin-left: auto;
+  }
+
+  .image-viewer-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .image-viewer-content {
+    padding: 12px;
+  }
+
+  .image-viewer-image {
+    max-width: 96vw;
+    max-height: calc(100vh - 112px);
+  }
+}

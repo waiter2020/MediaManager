@@ -4,7 +4,11 @@ import type { MediaItem } from '@/types/media';
 
 export interface DiscoverResponse {
   continueWatching?: MediaItem[];
+  watchlist?: MediaItem[];
   recommended?: MediaItem[];
+  favorites?: MediaItem[];
+  topRated?: MediaItem[];
+  unwatched?: MediaItem[];
   recentlyAdded?: MediaItem[];
 }
 

@@ -1,6 +1,6 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { Badge, Card, Input, Select, Space, Switch, Tabs, Button, message } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getAccessToken } from '@/utils/authSession';
 
 type LogSource = 'APP' | 'TASK' | string;
@@ -26,15 +26,31 @@ const TerminalConsole: React.FC<{
   clearLogs: () => void;
 }> = ({ logs, autoScroll, clearLogs }) => {
   const consoleRef = useRef<HTMLDivElement | null>(null);
+  const lockedScrollTopRef = useRef(0);
 
-  useEffect(() => {
-    if (!autoScroll || !consoleRef.current) return;
-    consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+  useLayoutEffect(() => {
+    const el = consoleRef.current;
+    if (!el) return;
+
+    if (autoScroll) {
+      el.scrollTop = el.scrollHeight;
+      lockedScrollTopRef.current = el.scrollTop;
+      return;
+    }
+
+    const maxScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(lockedScrollTopRef.current, maxScrollTop);
   }, [logs, autoScroll]);
+
+  const handleScroll = () => {
+    if (consoleRef.current) {
+      lockedScrollTopRef.current = consoleRef.current.scrollTop;
+    }
+  };
 
   return (
     <div className="terminal-container" style={{ position: 'relative', marginTop: 12 }}>
-      <div ref={consoleRef} className="terminal-console">
+      <div ref={consoleRef} className="terminal-console" onScroll={handleScroll}>
         {logs.length === 0 ? (
           <div style={{ color: '#6b7280', textAlign: 'center', padding: '60px 0', fontFamily: 'monospace' }}>
             _ 终端空闲中，等待日志输入...
@@ -246,6 +262,21 @@ const LogsPage: React.FC = () => {
           margin-top: 4px;
           font-size: 12px;
           border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        @media (max-width: 640px) {
+          .terminal-console {
+            min-height: 340px;
+            max-height: 56vh;
+            padding: 12px;
+            font-size: 12px;
+          }
+
+          .terminal-container > .ant-btn {
+            position: static !important;
+            width: 100%;
+            margin-top: 8px;
+          }
         }
       `}</style>
 

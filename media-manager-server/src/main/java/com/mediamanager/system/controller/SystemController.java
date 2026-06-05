@@ -53,6 +53,13 @@ public class SystemController {
         return ApiResponse.success(status);
     }
 
+    @GetMapping("/capabilities")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get system runtime capabilities")
+    public ApiResponse<Map<String, Object>> getCapabilities() {
+        return ApiResponse.success(capabilitiesService.capabilitiesSnapshot());
+    }
+
     @GetMapping("/directories")
     @PreAuthorize("hasAuthority('library:create')")
     @Operation(summary = "List server directories")
@@ -188,4 +195,3 @@ public class SystemController {
                 .registerEmitter();
     }
 }
-

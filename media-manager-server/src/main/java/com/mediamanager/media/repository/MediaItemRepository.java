@@ -22,6 +22,21 @@ public interface MediaItemRepository extends JpaRepository<MediaItem, Integer>, 
 
     long countByLibrary_IdAndHiddenFalse(Integer libraryId);
 
+    @Query("""
+            SELECT COUNT(m) FROM MediaItem m
+            WHERE m.library.id = :libraryId
+              AND (m.hidden = false OR m.hidden IS NULL)
+            """)
+    long countVisibleByLibraryId(@Param("libraryId") Integer libraryId);
+
+    @Query("""
+            SELECT COUNT(m) FROM MediaItem m
+            WHERE m.library.id = :libraryId
+              AND (m.hidden = false OR m.hidden IS NULL)
+              AND m.type IN ('MOVIE', 'TV_SHOW', 'EPISODE')
+            """)
+    long countVisibleVideosByLibraryId(@Param("libraryId") Integer libraryId);
+
     long countByLibrary_IdAndTypeAndHiddenFalse(Integer libraryId, String type);
 
     long countByTypeAndHiddenFalse(String type);
@@ -57,12 +72,43 @@ public interface MediaItemRepository extends JpaRepository<MediaItem, Integer>, 
     @EntityGraph(attributePaths = {"library", "library.extractorConfigs"})
     List<MediaItem> findAllByOrderByIdAsc();
 
+    @EntityGraph(attributePaths = {"library"})
+    @Query("""
+            SELECT m FROM MediaItem m
+            WHERE m.library.id = :libraryId
+              AND (m.hidden = false OR m.hidden IS NULL)
+              AND m.id > :afterId
+            ORDER BY m.id ASC
+            """)
+    List<MediaItem> findVisibleForAiClassification(
+            @Param("libraryId") Integer libraryId,
+            @Param("afterId") Integer afterId,
+            Pageable pageable);
+
+    @EntityGraph(attributePaths = {"library"})
+    @Query("""
+            SELECT m FROM MediaItem m
+            WHERE m.library.id = :libraryId
+              AND (m.hidden = false OR m.hidden IS NULL)
+              AND m.type IN ('MOVIE', 'TV_SHOW', 'EPISODE')
+              AND m.id > :afterId
+            ORDER BY m.id ASC
+            """)
+    List<MediaItem> findVisibleVideosForAiClassification(
+            @Param("libraryId") Integer libraryId,
+            @Param("afterId") Integer afterId,
+            Pageable pageable);
+
     @Override
     @EntityGraph(attributePaths = {"library"})
     Page<MediaItem> findAll(Specification<MediaItem> spec, Pageable pageable);
 
     @Query("SELECT m.id FROM MediaItem m WHERE (m.hidden = false OR m.hidden IS NULL) AND m.library.id IN :libraryIds")
     List<Integer> findVisibleIdsByLibraryIdsIn(@Param("libraryIds") Collection<Integer> libraryIds);
+
+    @EntityGraph(attributePaths = {"library", "categories", "tags"})
+    @Query("SELECT m FROM MediaItem m WHERE m.id = :id")
+    Optional<MediaItem> findByIdWithClassificationGraph(@Param("id") Integer id);
 
     /** After library path migration/rescan, hidden rows may have a visible duplicate with the same title. */
     @Query("""

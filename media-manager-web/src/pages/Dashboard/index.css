@@ -184,7 +184,7 @@
 /* Mobile */
 @media (max-width: 640px) {
   .dashboard-page {
-    padding: 0 16px 16px;
+    padding: 0 10px 16px;
   }
 
   .dashboard-page h2 {
@@ -221,5 +221,11 @@
 
   .dashboard-main {
     gap: 16px;
+  }
+}
+
+@media (max-width: 380px) {
+  .stat-cards {
+    grid-template-columns: 1fr;
   }
 }

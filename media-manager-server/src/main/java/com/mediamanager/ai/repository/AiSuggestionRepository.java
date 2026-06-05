@@ -10,4 +10,10 @@ public interface AiSuggestionRepository extends JpaRepository<AiSuggestion, Inte
 
     @EntityGraph(attributePaths = {"mediaItem", "mediaItem.library"})
     List<AiSuggestion> findByReviewStatusOrderByCreatedAtDesc(String reviewStatus);
+
+    boolean existsByMediaItem_IdAndFieldNameAndSuggestedValueAndReviewStatus(
+            Integer mediaItemId,
+            String fieldName,
+            String suggestedValue,
+            String reviewStatus);
 }

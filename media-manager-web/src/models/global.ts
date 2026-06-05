@@ -5,14 +5,26 @@ import { authHeaders, getAccessToken } from '@/utils/authSession';
 export interface ScanProgress {
   libraryId: number;
   libraryName: string;
-  status: 'SCANNING' | 'DONE' | 'ERROR';
+  status: 'SCANNING' | 'DONE' | 'ERROR' | 'CANCELLED';
   currentPath: string;
   totalFiles: number;
   scannedFiles: number;
   matchedFiles: number;
+  skippedFiles?: number;
   newItems: number;
+  updatedItems?: number;
+  restoredItems?: number;
+  failedItems?: number;
+  missingItems?: number;
   startedAt: number;
   updatedAt: number;
+  recentErrors?: ScanError[];
+}
+
+export interface ScanError {
+  path: string;
+  message: string;
+  timestamp: number;
 }
 
 export interface ScanEvent {
@@ -26,6 +38,7 @@ export interface ScrapeTaskEvent {
   status: string;
   scraped?: number;
   errors?: number;
+  total?: number;
 }
 
 const MAX_EVENTS = 30;
@@ -59,7 +72,7 @@ export default () => {
         const data: ScanProgress = JSON.parse(raw);
         if (typeof data.libraryId !== 'number') return;
         setScanStatus((prev) => {
-          if (data.status === 'DONE' || data.status === 'ERROR') {
+          if (data.status === 'DONE' || data.status === 'ERROR' || data.status === 'CANCELLED') {
             const next = { ...prev };
             delete next[data.libraryId];
             return next;

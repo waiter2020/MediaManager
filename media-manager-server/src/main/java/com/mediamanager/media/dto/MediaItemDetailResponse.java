@@ -17,6 +17,7 @@ public class MediaItemDetailResponse {
 
     private Integer id;
     private Integer libraryId;
+    private String libraryName;
     private String title;
     private String originalTitle;
     private String type;
@@ -29,9 +30,19 @@ public class MediaItemDetailResponse {
     private Instant createdAt;
     private Instant updatedAt;
 
+    private List<Integer> fileIds;
     private List<MediaFileDto> files;
+    private List<MediaChapterDto> chapters;
+    private List<MediaSubtitleDto> subtitles;
     private List<TagDto> tags;
     private List<CategoryDto> categories;
+
+    private Integer playbackPosition;
+    private Integer playbackDuration;
+    private Double playbackPercent;
+    private Boolean watched;
+    private Boolean favorited;
+    private Boolean watchlisted;
 
     private MovieMetadataDto movieMetadata;
     private TvShowMetadataDto tvShowMetadata;

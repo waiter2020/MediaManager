@@ -43,6 +43,7 @@ public class LibraryScanService {
     private final Map<Integer, Boolean> cancelledScans = new ConcurrentHashMap<>();
 
     private static final int THROTTLE_FILE_COUNT = 50;
+    private static final int MAX_RECENT_SCAN_ERRORS = 20;
 
     public Map<Integer, ScanProgressDTO> getActiveScans() {
         return activeScans;
@@ -109,7 +110,12 @@ public class LibraryScanService {
                 .totalFiles(0)
                 .scannedFiles(0)
                 .matchedFiles(0)
+                .skippedFiles(0)
                 .newItems(0)
+                .updatedItems(0)
+                .restoredItems(0)
+                .failedItems(0)
+                .missingItems(0)
                 .startedAt(System.currentTimeMillis())
                 .updatedAt(System.currentTimeMillis())
                 .build();
@@ -149,7 +155,8 @@ public class LibraryScanService {
             }
 
             if (isCancelled(libraryId)) {
-                applyProgressCounts(progress, totalFiles, matchedFiles, newFiles);
+                applyProgressCounts(progress, totalFiles, matchedFiles, newFiles,
+                        updatedFiles, restoredFiles, failedFiles, new AtomicInteger(0));
                 progress.setStatus("CANCELLED");
                 progress.setUpdatedAt(System.currentTimeMillis());
                 broadcastProgress(progress);
@@ -170,7 +177,8 @@ public class LibraryScanService {
 
             updateLastScannedAt(libraryId);
 
-            applyProgressCounts(progress, totalFiles, matchedFiles, newFiles);
+            applyProgressCounts(progress, totalFiles, matchedFiles, newFiles,
+                    updatedFiles, restoredFiles, failedFiles, new AtomicInteger(missingFiles));
             progress.setStatus("DONE");
             progress.setUpdatedAt(System.currentTimeMillis());
             broadcastProgress(progress);
@@ -189,6 +197,7 @@ public class LibraryScanService {
                     .libraryId(libraryId)
                     .message(summary)
                     .build());
+            broadcastRecentScanErrors(progress, libraryId);
 
             sseService.broadcast("library.updated", Map.of("libraryId", libraryId, "action", "scan_completed"));
 
@@ -248,7 +257,12 @@ public class LibraryScanService {
                 .totalFiles(0)
                 .scannedFiles(0)
                 .matchedFiles(0)
+                .skippedFiles(0)
                 .newItems(0)
+                .updatedItems(0)
+                .restoredItems(0)
+                .failedItems(0)
+                .missingItems(0)
                 .startedAt(System.currentTimeMillis())
                 .updatedAt(System.currentTimeMillis())
                 .build();
@@ -270,13 +284,15 @@ public class LibraryScanService {
                     updated, restored, failed, progress);
             int missing = reconcileMissingFiles(lib, targetDir);
             updateLastScannedAt(lib.getId());
-            applyProgressCounts(progress, total, matched, added);
+            applyProgressCounts(progress, total, matched, added,
+                    updated, restored, failed, new AtomicInteger(missing));
             progress.setStatus("DONE");
             progress.setUpdatedAt(System.currentTimeMillis());
             broadcastProgress(progress);
             broadcastScanMessage(String.format(
                     "Targeted scan done: %d files, %d matched, %d new, %d updated, %d restored, %d failed, %d missing",
                     total.get(), matched.get(), added.get(), updated.get(), restored.get(), failed.get(), missing));
+            broadcastRecentScanErrors(progress, lib.getId());
         } finally {
             activeScans.remove(lib.getId());
         }
@@ -335,30 +351,36 @@ public class LibraryScanService {
                     }
                     totalFiles.incrementAndGet();
 
-                    FileScanProcessor.ScanOutcome outcome;
+                    FileScanProcessor.ScanResult scanResult;
                     try {
-                        outcome = fileScanProcessor.scanFile(library, file, attrs);
+                        scanResult = fileScanProcessor.scanFile(library, file, attrs);
                     } catch (Exception e) {
                         log.error("Failed to scan file: {}", file, e);
-                        outcome = FileScanProcessor.ScanOutcome.FAILED;
+                        scanResult = FileScanProcessor.ScanResult.failed(e);
                     }
-                    if (!outcome.matchedMediaFile()) {
-                        throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles, file);
+                    if (!scanResult.matchedMediaFile()) {
+                        throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles,
+                                updatedFiles, restoredFiles, failedFiles, file);
                         return FileVisitResult.CONTINUE;
                     }
 
+                    FileScanProcessor.ScanOutcome outcome = scanResult.outcome();
                     matchedFiles.incrementAndGet();
                     switch (outcome) {
                         case CREATED -> newFiles.incrementAndGet();
                         case UPDATED -> updatedFiles.incrementAndGet();
                         case RESTORED -> restoredFiles.incrementAndGet();
-                        case FAILED -> failedFiles.incrementAndGet();
+                        case FAILED -> {
+                            failedFiles.incrementAndGet();
+                            recordScanError(progress, file, scanResult.errorMessage());
+                        }
                         default -> {
                             // UNCHANGED is still a matched media file, but no counters need to move.
                         }
                     }
 
-                    throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles, file);
+                    throttledProgressUpdate(progress, totalFiles, matchedFiles, newFiles,
+                            updatedFiles, restoredFiles, failedFiles, file);
                     return FileVisitResult.CONTINUE;
                 }
 
@@ -367,6 +389,8 @@ public class LibraryScanService {
                     if (isCancelled(library.getId())) {
                         return FileVisitResult.TERMINATE;
                     }
+                    failedFiles.incrementAndGet();
+                    recordScanError(progress, file, describeException(exc));
                     log.warn("Failed to access file: {}", file, exc);
                     return FileVisitResult.CONTINUE;
                 }
@@ -497,12 +521,20 @@ public class LibraryScanService {
 
     private void throttledProgressUpdate(ScanProgressDTO progress,
                                          AtomicInteger totalFiles, AtomicInteger matchedFiles,
-                                         AtomicInteger newFiles, Path currentFile) {
+                                         AtomicInteger newFiles,
+                                         AtomicInteger updatedFiles,
+                                         AtomicInteger restoredFiles,
+                                         AtomicInteger failedFiles,
+                                         Path currentFile) {
         if (progress == null) return;
         int total = totalFiles.get();
         if (total % THROTTLE_FILE_COUNT != 0) return;
 
-        applyProgressCounts(progress, totalFiles, matchedFiles, newFiles);
+        applyProgressCounts(progress, totalFiles, matchedFiles, newFiles,
+                updatedFiles,
+                restoredFiles,
+                failedFiles,
+                new AtomicInteger(progress.getMissingItems()));
         progress.setCurrentPath(currentFile.getParent() != null ? currentFile.getParent().toString() : "");
         progress.setUpdatedAt(System.currentTimeMillis());
         broadcastProgress(progress);
@@ -511,15 +543,25 @@ public class LibraryScanService {
     private void applyProgressCounts(ScanProgressDTO progress,
                                      AtomicInteger totalFiles,
                                      AtomicInteger matchedFiles,
-                                     AtomicInteger newFiles) {
+                                     AtomicInteger newFiles,
+                                     AtomicInteger updatedFiles,
+                                     AtomicInteger restoredFiles,
+                                     AtomicInteger failedFiles,
+                                     AtomicInteger missingFiles) {
         if (progress == null) {
             return;
         }
         int total = totalFiles.get();
+        int matched = matchedFiles.get();
         progress.setTotalFiles(total);
         progress.setScannedFiles(total);
-        progress.setMatchedFiles(matchedFiles.get());
+        progress.setMatchedFiles(matched);
+        progress.setSkippedFiles(Math.max(0, total - matched));
         progress.setNewItems(newFiles.get());
+        progress.setUpdatedItems(updatedFiles.get());
+        progress.setRestoredItems(restoredFiles.get());
+        progress.setFailedItems(failedFiles.get());
+        progress.setMissingItems(missingFiles.get());
     }
 
     private boolean isStoredFileUnderScope(String storedPath, Path normalizedScope) {
@@ -547,6 +589,52 @@ public class LibraryScanService {
         }
         candidates.add(storedPath.replace('\\', '/'));
         return candidates.stream().toList();
+    }
+
+    private void recordScanError(ScanProgressDTO progress, Path file, String message) {
+        if (progress == null) {
+            return;
+        }
+        String path = file != null ? file.toString().replace('\\', '/') : "";
+        String detail = (message == null || message.isBlank()) ? "Unknown scan error" : message;
+        progress.getRecentErrors().add(ScanProgressDTO.ScanErrorDTO.builder()
+                .path(path)
+                .message(detail)
+                .timestamp(System.currentTimeMillis())
+                .build());
+        while (progress.getRecentErrors().size() > MAX_RECENT_SCAN_ERRORS) {
+            progress.getRecentErrors().remove(0);
+        }
+    }
+
+    private String describeException(Throwable error) {
+        if (error == null) {
+            return "Unknown scan error";
+        }
+        String message = error.getMessage();
+        if (message == null || message.isBlank()) {
+            return error.getClass().getSimpleName();
+        }
+        return error.getClass().getSimpleName() + ": " + message;
+    }
+
+    private void broadcastRecentScanErrors(ScanProgressDTO progress, Integer libraryId) {
+        if (progress == null || progress.getRecentErrors() == null || progress.getRecentErrors().isEmpty()) {
+            return;
+        }
+        String details = String.join("\n", progress.getRecentErrors().stream()
+                .map(error -> error.getPath() + ": " + error.getMessage())
+                .toList());
+        String message = "Recent scan failures:\n" + details;
+        broadcastScanMessage(message);
+        SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
+                .timestamp(System.currentTimeMillis())
+                .level("ERROR")
+                .source("TASK")
+                .type("SCAN_ERROR")
+                .libraryId(libraryId)
+                .message(message)
+                .build());
     }
 
     private void broadcastProgress(ScanProgressDTO progress) {

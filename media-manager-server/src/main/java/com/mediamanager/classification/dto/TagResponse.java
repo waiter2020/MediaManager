@@ -16,5 +16,6 @@ public class TagResponse {
     private String name;
     private String color;
     private String source;
+    private Long usageCount;
     private Instant createdAt;
 }

@@ -4,6 +4,8 @@ import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.plugin.MediaManagerPlugin;
 import com.mediamanager.plugin.PluginKind;
 
+import java.util.List;
+
 public interface ClassifierStrategy extends MediaManagerPlugin {
 
     @Override
@@ -31,6 +33,24 @@ public interface ClassifierStrategy extends MediaManagerPlugin {
      * Often relies on the metadata populated in M3.
      */
     void classify(MediaItem item);
+
+    default void classifyBatch(List<MediaItem> items) {
+        if (items == null || items.isEmpty()) {
+            return;
+        }
+        for (MediaItem item : items) {
+            classify(item);
+        }
+    }
+
+    /**
+     * Database-only classifiers can run in a short transaction. Classifiers that
+     * call external services should opt out so they do not hold SQLite snapshots
+     * while waiting on network IO.
+     */
+    default boolean runsInTransaction() {
+        return true;
+    }
 
     /**
      * Priority of this classifier. Lower number = earlier execution.

@@ -20,7 +20,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class OpenAiCompatibleProvider implements AiProvider {
 
-    private final RestTemplate restTemplate;
+    private final AiHttpClientFactory httpClientFactory;
     private final ObjectMapper objectMapper;
 
     private static final int MAX_RETRIES = 2;
@@ -46,12 +46,15 @@ public class OpenAiCompatibleProvider implements AiProvider {
         String baseUrl = str(config, "baseUrl", "https://api.openai.com/v1");
         String model = str(config, "embedModel", "text-embedding-3-small");
         String apiKey = str(config, "apiKey", "");
+        long timeoutMs = longVal(config, "timeoutMs", AiHttpClientFactory.DEFAULT_TIMEOUT_MS);
+        RestTemplate requestClient = httpClientFactory.create(timeoutMs);
+        log.debug("OpenAI embed request: model={}, timeoutMs={}", model, timeoutMs);
 
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 HttpHeaders headers = authHeaders(apiKey);
                 Map<String, Object> body = Map.of("model", model, "input", text);
-                String resp = restTemplate.postForObject(
+                String resp = requestClient.postForObject(
                         baseUrl + "/embeddings", new HttpEntity<>(body, headers), String.class);
                 JsonNode node = objectMapper.readTree(resp);
                 JsonNode arr = node.path("data").path(0).path("embedding");
@@ -82,7 +85,8 @@ public class OpenAiCompatibleProvider implements AiProvider {
                             attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
                     sleepQuietly(backoff);
                 } else {
-                    log.warn("OpenAI embed failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                    log.warn("OpenAI embed failed after {} attempts (model={}, timeoutMs={}): {}",
+                            MAX_RETRIES + 1, model, timeoutMs, e.getMessage());
                 }
             }
         }
@@ -146,6 +150,9 @@ public class OpenAiCompatibleProvider implements AiProvider {
         String baseUrl = str(config, "baseUrl", "https://api.openai.com/v1");
         String model = str(config, "llmModel", "gpt-4o-mini");
         String apiKey = str(config, "apiKey", "");
+        long timeoutMs = longVal(config, "timeoutMs", AiHttpClientFactory.DEFAULT_TIMEOUT_MS);
+        RestTemplate requestClient = httpClientFactory.create(timeoutMs);
+        log.debug("OpenAI chat request: model={}, timeoutMs={}", model, timeoutMs);
 
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
@@ -153,7 +160,7 @@ public class OpenAiCompatibleProvider implements AiProvider {
                 Map<String, Object> body = Map.of(
                         "model", model,
                         "messages", List.of(Map.of("role", "user", "content", prompt)));
-                String resp = restTemplate.postForObject(
+                String resp = requestClient.postForObject(
                         baseUrl + "/chat/completions", new HttpEntity<>(body, headers), String.class);
                 JsonNode node = objectMapper.readTree(resp);
                 return Optional.ofNullable(node.path("choices").path(0).path("message").path("content").asText(null));
@@ -176,7 +183,8 @@ public class OpenAiCompatibleProvider implements AiProvider {
                             attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
                     sleepQuietly(backoff);
                 } else {
-                    log.warn("OpenAI chat failed after {} attempts: {}", MAX_RETRIES + 1, e.getMessage());
+                    log.warn("OpenAI chat failed after {} attempts (model={}, timeoutMs={}): {}",
+                            MAX_RETRIES + 1, model, timeoutMs, e.getMessage());
                 }
             }
         }
@@ -205,5 +213,20 @@ public class OpenAiCompatibleProvider implements AiProvider {
             return def;
         }
         return String.valueOf(config.get(key));
+    }
+
+    private long longVal(Map<String, Object> config, String key, long def) {
+        if (config == null || !config.containsKey(key)) {
+            return def;
+        }
+        Object value = config.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return def;
+        }
     }
 }

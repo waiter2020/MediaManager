@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -157,16 +158,25 @@ public class LibraryPluginConfigService {
         repository.flush();
 
         List<LibraryPluginConfig> toSave = new ArrayList<>();
+        Map<String, LibraryPluginConfig> normalizedByKey = new LinkedHashMap<>();
         for (Map<String, Object> cfg : configs) {
-            toSave.add(LibraryPluginConfig.builder()
+            String pluginId = normalizePluginId(String.valueOf(cfg.get("pluginId")));
+            String kind = normalizeKind(pluginId, String.valueOf(cfg.getOrDefault("kind", PluginKind.EXTRACTOR.name())));
+            String key = kind + ":" + pluginId;
+            if (normalizedByKey.containsKey(key)) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                        "Duplicate plugin config: " + pluginId + " (" + kind + ")");
+            }
+            normalizedByKey.put(key, LibraryPluginConfig.builder()
                     .library(library)
-                    .pluginId(String.valueOf(cfg.get("pluginId")))
-                    .kind(String.valueOf(cfg.getOrDefault("kind", PluginKind.EXTRACTOR.name())))
+                    .pluginId(pluginId)
+                    .kind(kind)
                     .enabled(cfg.get("enabled") == null || Boolean.parseBoolean(String.valueOf(cfg.get("enabled"))))
                     .priority(cfg.get("priority") != null ? Integer.parseInt(String.valueOf(cfg.get("priority"))) : 100)
                     .config(cfg.get("config") != null ? String.valueOf(cfg.get("config")) : null)
                     .build());
         }
+        toSave.addAll(normalizedByKey.values());
         repository.saveAll(toSave);
     }
 
@@ -195,11 +205,30 @@ public class LibraryPluginConfigService {
     }
 
     private Map<String, Object> toMap(LibraryPluginConfig c) {
+        String pluginId = normalizePluginId(c.getPluginId());
+        String kind = normalizeKind(pluginId, c.getKind());
         return Map.of(
-                "pluginId", c.getPluginId(),
-                "kind", c.getKind(),
+                "pluginId", pluginId,
+                "kind", kind,
                 "enabled", c.getEnabled(),
                 "priority", c.getPriority(),
                 "config", c.getConfig() != null ? c.getConfig() : "");
+    }
+
+    private String normalizePluginId(String pluginId) {
+        if (pluginId == null || pluginId.isBlank() || "null".equalsIgnoreCase(pluginId)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "pluginId is required");
+        }
+        return pluginId.trim().toLowerCase();
+    }
+
+    private String normalizeKind(String pluginId, String kind) {
+        if (SCRAPER_IDS.contains(pluginId)) {
+            return PluginKind.SCRAPER.name();
+        }
+        if (kind == null || kind.isBlank() || "null".equalsIgnoreCase(kind)) {
+            return PluginKind.EXTRACTOR.name();
+        }
+        return kind.trim().toUpperCase();
     }
 }

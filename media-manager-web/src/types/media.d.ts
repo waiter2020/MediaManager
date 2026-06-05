@@ -1,4 +1,4 @@
-export type MediaType = 'MOVIE' | 'TV_SHOW' | 'IMAGE' | 'AUDIO' | 'MIXED';
+export type MediaType = 'MOVIE' | 'TV_SHOW' | 'EPISODE' | 'IMAGE' | 'AUDIO' | 'MIXED';
 
 export interface MediaFile {
   id: number;
@@ -14,6 +14,33 @@ export interface MediaFile {
   durationSeconds?: number;
   bitrate?: number;
   deleted?: boolean;
+}
+
+export interface MediaSubtitle {
+  id: number;
+  mediaItemId?: number;
+  mediaFileId?: number;
+  fileName?: string;
+  language?: string;
+  format?: string;
+  title?: string;
+  source?: string;
+  provider?: string;
+  externalId?: string;
+  fileSize?: number;
+  defaultTrack?: boolean;
+  forced?: boolean;
+}
+
+export interface MediaChapter {
+  id: number;
+  mediaFileId: number;
+  chapterIndex: number;
+  title?: string;
+  startSeconds: number;
+  endSeconds?: number;
+  source?: 'EMBEDDED' | 'GENERATED' | string;
+  thumbnailAvailable?: boolean;
 }
 
 export interface MediaItem {
@@ -34,6 +61,8 @@ export interface MediaItem {
   updatedAt?: string;
   files?: MediaFile[];
   fileIds?: number[];
+  chapters?: MediaChapter[];
+  subtitles?: MediaSubtitle[];
   tags?: { id: number; name: string; color?: string }[];
   categories?: { id: number; name: string }[];
   movieMetadata?: {
@@ -74,5 +103,9 @@ export interface MediaItem {
     genres?: string[] | string;
   };
   playbackPosition?: number;
+  playbackDuration?: number;
+  playbackPercent?: number;
+  watched?: boolean;
+  favorited?: boolean;
+  watchlisted?: boolean;
 }
-

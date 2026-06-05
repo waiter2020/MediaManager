@@ -175,6 +175,37 @@ class LibraryPluginIntegrationTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.data.plugins[0].pluginId").value("exif"));
     }
 
+    @Test
+    void putLibraryPluginsNormalizesLegacyScraperRows() throws Exception {
+        MediaLibraryCreateRequest req = new MediaLibraryCreateRequest();
+        req.setName("NormalizePlugins");
+        req.setType("MOVIE");
+        req.setPaths(List.of(pathReq("/media/normalize-plugins")));
+
+        String createRes = mockMvc.perform(post("/api/v1/libraries")
+                        .header("Authorization", adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        int libraryId = objectMapper.readTree(createRes).path("data").path("id").asInt();
+
+        String body = """
+                [{"pluginId":"TMDB","kind":"EXTRACTOR","enabled":true,"priority":0,"config":"{}"}]
+                """;
+
+        mockMvc.perform(put("/api/v1/libraries/" + libraryId + "/plugins")
+                        .header("Authorization", adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].pluginId").value("tmdb"))
+                .andExpect(jsonPath("$.data[0].kind").value("SCRAPER"));
+    }
+
     private static MediaLibraryCreateRequest.PathReq pathReq(String path) {
         MediaLibraryCreateRequest.PathReq p = new MediaLibraryCreateRequest.PathReq();
         p.setPath(path);

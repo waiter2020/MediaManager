@@ -6,6 +6,7 @@ export interface TagItem {
   name: string;
   color?: string;
   source?: string;
+  usageCount?: number;
   createdAt?: string;
 }
 
@@ -83,10 +84,16 @@ export async function deleteCategory(id: number) {
 
 export interface LibraryClassifyStatus {
   running?: boolean;
+  state?: 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+  phase?: string;
   libraryId?: number;
   processed?: number;
   failed?: number;
   total?: number;
+  cancelRequested?: boolean;
+  startedAt?: number;
+  finishedAt?: number;
+  message?: string;
 }
 
 export interface LibraryClassifyStartResult {
@@ -104,5 +111,11 @@ export async function classifyLibrary(id: number) {
 export async function getLibraryClassifyStatus() {
   return request<ApiResponse<LibraryClassifyStatus>>('/api/v1/libraries/classify/status', {
     method: 'GET',
+  });
+}
+
+export async function cancelLibraryClassify() {
+  return request<ApiResponse<boolean>>('/api/v1/libraries/classify/cancel', {
+    method: 'POST',
   });
 }

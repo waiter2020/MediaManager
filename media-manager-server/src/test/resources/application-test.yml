@@ -1,7 +1,11 @@
 spring:
   datasource:
-    url: jdbc:sqlite:file:target/test-mediamanager.db?mode=memory&cache=shared
+    url: jdbc:sqlite:file:target/test-mediamanager.db?mode=memory&cache=shared&busy_timeout=60000
     driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+      connection-timeout: 60000
   jpa:
     hibernate:
       ddl-auto: none
@@ -20,6 +24,8 @@ mediamanager:
       refresh-token-expiration: 86400000
   ai:
     default-provider: noop
+    llm-provider: noop
+    embed-provider: noop
   library:
     scan:
       enabled: false

@@ -3,9 +3,15 @@ import type { ApiResponse } from '@/types/api';
 
 export interface AiConfigPayload {
   defaultProvider: string;
+  llmProvider?: string;
+  embedProvider?: string;
   ollamaBaseUrl: string;
   openaiBaseUrl: string;
   openaiApiKey?: string;
+  openaiLlmBaseUrl?: string;
+  openaiLlmApiKey?: string;
+  openaiEmbedBaseUrl?: string;
+  openaiEmbedApiKey?: string;
   llmModel: string;
   embedModel: string;
   classifierEnabled: boolean;
@@ -31,6 +37,10 @@ export interface AiHealth {
   enabled?: boolean;
   provider?: string;
   displayName?: string;
+  llmProvider?: string;
+  llmProviderName?: string;
+  embedProvider?: string;
+  embedProviderName?: string;
   available?: boolean;
   message?: string;
   embedModel?: string;
@@ -53,6 +63,91 @@ export interface AiSuggestion {
 export interface BatchSuggestionResult {
   approved?: number;
   rejected?: number;
+}
+
+export interface AiOrganizationRequest {
+  libraryId?: number;
+  mergeDuplicateTags?: boolean;
+  deleteUnusedTags?: boolean;
+  deleteLowUsageTags?: boolean;
+  protectManualTags?: boolean;
+  recolorTags?: boolean;
+  recolorManualTags?: boolean;
+  createSmartCollections?: boolean;
+  lowUsageThreshold?: number;
+  maxCollections?: number;
+  minCollectionTagUsage?: number;
+  collectionItemLimit?: number;
+}
+
+export interface AiOrganizationTagUsage {
+  id: number;
+  name: string;
+  color?: string;
+  source?: string;
+  usageCount?: number;
+  cleanupReason?: string;
+}
+
+export interface AiOrganizationDuplicateGroup {
+  semanticKey: string;
+  canonicalTag: AiOrganizationTagUsage;
+  duplicateTags: AiOrganizationTagUsage[];
+}
+
+export interface AiOrganizationGeneratedCollection {
+  id?: number;
+  name: string;
+  tagId: number;
+  tagName: string;
+  itemCount?: number;
+  created?: boolean;
+}
+
+export interface AiOrganizationResponse {
+  libraryId?: number;
+  applied?: boolean;
+  unusedTagCount?: number;
+  cleanupTagCount?: number;
+  duplicateGroupCount?: number;
+  smartCollectionCandidateCount?: number;
+  deletedUnusedTagCount?: number;
+  deletedCleanupTagCount?: number;
+  mergedTagCount?: number;
+  translatedTagCount?: number;
+  recoloredTagCount?: number;
+  createdCollectionCount?: number;
+  unusedTags?: AiOrganizationTagUsage[];
+  cleanupTags?: AiOrganizationTagUsage[];
+  duplicateTagGroups?: AiOrganizationDuplicateGroup[];
+  smartCollectionCandidates?: AiOrganizationTagUsage[];
+  generatedCollections?: AiOrganizationGeneratedCollection[];
+}
+
+export interface AiOrganizationJobStatus {
+  state?: 'idle' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+  phase?: string;
+  libraryId?: number;
+  total?: number;
+  processed?: number;
+  failed?: number;
+  mergedTagCount?: number;
+  translatedTagCount?: number;
+  deletedCleanupTagCount?: number;
+  deletedUnusedTagCount?: number;
+  recoloredTagCount?: number;
+  createdCollectionCount?: number;
+  cancelRequested?: boolean;
+  startedAt?: number;
+  finishedAt?: number;
+  message?: string;
+  result?: AiOrganizationResponse;
+}
+
+export interface AiOrganizationStartResult {
+  accepted?: boolean;
+  message?: string;
+  status?: AiOrganizationJobStatus;
 }
 
 export async function getAiHealth(options?: { refresh?: boolean }) {
@@ -109,12 +204,40 @@ export async function batchRejectSuggestions(ids: number[]) {
   });
 }
 
+export async function previewAiOrganization(params?: AiOrganizationRequest) {
+  return request<ApiResponse<AiOrganizationResponse>>('/api/v1/ai/organization/preview', {
+    method: 'GET',
+    params,
+  });
+}
+
+export async function applyAiOrganization(data: AiOrganizationRequest) {
+  return request<ApiResponse<AiOrganizationStartResult>>('/api/v1/ai/organization/apply', {
+    method: 'POST',
+    data,
+  });
+}
+
+export async function getAiOrganizationStatus() {
+  return request<ApiResponse<AiOrganizationJobStatus>>('/api/v1/ai/organization/status', {
+    method: 'GET',
+  });
+}
+
+export async function cancelAiOrganization() {
+  return request<ApiResponse<boolean>>('/api/v1/ai/organization/cancel', {
+    method: 'POST',
+  });
+}
+
 export function defaultLibraryAiConfig(providerId: string): string {
   if (providerId === 'openai-compatible') {
     return JSON.stringify(
       {
-        baseUrl: 'https://api.openai.com/v1',
-        apiKey: '',
+        openaiLlmBaseUrl: 'https://api.openai.com/v1',
+        llmApiKey: '',
+        openaiEmbedBaseUrl: 'https://api.openai.com/v1',
+        embedApiKey: '',
         llmModel: 'gpt-4o-mini',
         embedModel: 'text-embedding-3-small',
       },

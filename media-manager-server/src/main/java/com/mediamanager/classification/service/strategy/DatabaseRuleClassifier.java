@@ -1,11 +1,10 @@
 package com.mediamanager.classification.service.strategy;
 
 import com.mediamanager.classification.entity.ClassificationRule;
-import com.mediamanager.classification.entity.Tag;
 import com.mediamanager.classification.repository.CategoryRepository;
 import com.mediamanager.classification.repository.ClassificationRuleRepository;
-import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.classification.service.ClassificationRuleMatcher;
+import com.mediamanager.classification.service.TagCanonicalizationService;
 import com.mediamanager.classification.spi.ClassifierStrategy;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
@@ -24,8 +23,8 @@ public class DatabaseRuleClassifier implements ClassifierStrategy {
 
     private final ClassificationRuleRepository ruleRepository;
     private final MediaFileRepository fileRepository;
-    private final TagRepository tagRepository;
     private final CategoryRepository categoryRepository;
+    private final TagCanonicalizationService tagCanonicalizationService;
 
     @Override
     public int getPriority() {
@@ -71,14 +70,8 @@ public class DatabaseRuleClassifier implements ClassifierStrategy {
             return;
         }
         if ("TAG".equals(targetType)) {
-            Tag tag = tagRepository.findByName(value)
-                    .orElseGet(() -> tagRepository.save(Tag.builder()
-                            .name(value)
-                            .color("#1677ff")
-                            .build()));
-            if (item.getTags().stream().noneMatch(t -> t.getId().equals(tag.getId()))) {
-                item.getTags().add(tag);
-            }
+            tagCanonicalizationService.findOrCreateTag(value, "RULE", "#1677ff")
+                    .ifPresent(tag -> tagCanonicalizationService.addCanonicalTag(item, tag));
         } else if ("CATEGORY".equals(targetType)) {
             categoryRepository.findAll().stream()
                     .filter(c -> value.equals(c.getName()))

@@ -2,9 +2,63 @@ import { request } from '@umijs/max';
 import type { ApiResponse } from '@/types/api';
 import { getAccessToken } from '@/utils/authSession';
 
-export async function getPlaybackInfo(fileId: number) {
-  return request<ApiResponse<{ mode: string; url: string }>>(`/api/v1/stream/${fileId}/playback`, {
+export type PlaybackModePreference = 'auto' | 'direct' | 'hls';
+export type PlaybackMode = 'direct' | 'hls';
+export type PlaybackQuality = 'auto' | 'source' | '2160p' | '1080p' | '720p' | '480p' | '360p';
+export type TranscodeMode = 'auto' | 'software' | 'hardware';
+
+export interface PlaybackOption {
+  value: string;
+  label: string;
+  height?: number;
+  bitrateKbps?: number;
+}
+
+export interface PlaybackInfo {
+  mode: PlaybackMode;
+  playMethod?: 'DirectPlay' | 'DirectStream' | 'Transcode' | string;
+  url: string;
+  variant?: string;
+  quality: PlaybackQuality | string;
+  transcodeMode: TranscodeMode | string;
+  directPlayable: boolean;
+  transcoding: boolean;
+  container?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  qualities?: PlaybackOption[];
+  transcodeModes?: PlaybackOption[];
+  transcodingReasons?: string[];
+}
+
+export interface TranscodeTelemetry {
+  speed: number;
+  fps: number;
+  time: string;
+  status: string;
+}
+
+export async function getPlaybackInfo(
+  fileId: number,
+  params?: {
+    mode?: PlaybackModePreference;
+    quality?: PlaybackQuality | string;
+    transcodeMode?: TranscodeMode | string;
+  },
+) {
+  return request<ApiResponse<PlaybackInfo>>(`/api/v1/stream/${fileId}/playback`, {
     method: 'GET',
+    params,
+  });
+}
+
+export async function getTranscodeSpeed(fileId: number, variant?: string) {
+  return request<ApiResponse<TranscodeTelemetry>>(`/api/v1/stream/${fileId}/transcode-speed`, {
+    method: 'GET',
+    params: variant ? { variant } : undefined,
   });
 }
 
@@ -30,6 +84,16 @@ export function getRawImageUrl(fileId: number) {
 export function getHlsMasterUrl(fileId: number) {
   const token = getAccessToken() || '';
   return `/api/v1/stream/${fileId}/hls/master.m3u8?token=${encodeURIComponent(token)}`;
+}
+
+export function getSubtitleTrackUrl(subtitleId: number) {
+  const token = getAccessToken() || '';
+  return `/api/v1/stream/subtitles/${subtitleId}.vtt?token=${encodeURIComponent(token)}`;
+}
+
+export function getChapterThumbnailUrl(chapterId: number) {
+  const token = getAccessToken() || '';
+  return `/api/v1/items/chapters/${chapterId}/thumbnail?token=${encodeURIComponent(token)}`;
 }
 
 /** Contract-aligned image URL (alias of stream/images). */
@@ -88,14 +152,8 @@ export function resolveItemBackdropUrl(options: {
   return resolveItemPosterUrl({ itemId, posterPath, type, fileIds, thumbnailWidth });
 }
 
-export function getItemPreviewUrl(itemId: number) {
-  const token = getAccessToken() || '';
-  return `/api/v1/items/${itemId}/preview?token=${encodeURIComponent(token)}`;
-}
-
 export async function refreshStreamToken() {
   return request<ApiResponse<void>>('/api/v1/stream/token', {
     method: 'POST',
   });
 }
-

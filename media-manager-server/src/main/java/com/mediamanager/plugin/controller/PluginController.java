@@ -34,11 +34,11 @@ public class PluginController {
 
     @PutMapping("/libraries/{libraryId}/plugins")
     @PreAuthorize("hasAuthority('library:edit')")
-    public ApiResponse<Void> updateLibraryPlugins(
+    public ApiResponse<List<Map<String, Object>>> updateLibraryPlugins(
             @PathVariable Integer libraryId,
             @RequestBody List<Map<String, Object>> configs) {
         libraryPluginConfigService.replaceConfigs(libraryId, configs);
-        return ApiResponse.success();
+        return ApiResponse.success(libraryPluginConfigService.listForLibrary(libraryId));
     }
 
     @PostMapping("/libraries/{libraryId}/plugins/apply-default")

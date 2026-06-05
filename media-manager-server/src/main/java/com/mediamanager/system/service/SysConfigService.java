@@ -32,6 +32,8 @@ public class SysConfigService {
 
     private static final Set<String> MASKED_KEYS = Set.of(
             "ai.openai.api_key",
+            "ai.openai.llm.api_key",
+            "ai.openai.embed.api_key",
             "tmdb.api_key"
     );
 
@@ -276,17 +278,34 @@ public class SysConfigService {
 
     public Map<String, Object> aiConfigOverrides() {
         Map<String, Object> cfg = new HashMap<>();
-        putIfPresent(cfg, "providerId", getString("ai.default_provider", null));
-        putIfPresent(cfg, "baseUrl", resolveAiBaseUrl());
+        String defaultProvider = getString("ai.default_provider", null);
+        putIfPresent(cfg, "providerId", defaultProvider);
+        putIfPresent(cfg, "llmProviderId", getString("ai.llm_provider", defaultProvider));
+        putIfPresent(cfg, "embedProviderId", getString("ai.embed_provider", defaultProvider));
+        putIfPresent(cfg, "ollamaBaseUrl", resolveOllamaBaseUrl());
+        String openaiBaseUrl = getString("ai.openai.base_url", "");
+        String openaiLlmBaseUrl = firstNonBlank(getString("ai.openai.llm.base_url", ""), openaiBaseUrl);
+        String openaiEmbedBaseUrl = firstNonBlank(getString("ai.openai.embed.base_url", ""), openaiBaseUrl);
+        putIfPresent(cfg, "openaiBaseUrl", openaiBaseUrl);
+        putIfPresent(cfg, "openaiLlmBaseUrl", openaiLlmBaseUrl);
+        putIfPresent(cfg, "openaiEmbedBaseUrl", openaiEmbedBaseUrl);
         putIfPresent(cfg, "llmModel", getString("ai.llm_model", null));
         putIfPresent(cfg, "embedModel", getString("ai.embed_model", null));
         String apiKey = getString("ai.openai.api_key", "");
+        String llmApiKey = firstNonBlank(getString("ai.openai.llm.api_key", ""), apiKey);
+        String embedApiKey = firstNonBlank(getString("ai.openai.embed.api_key", ""), apiKey);
         if (!apiKey.isBlank()) {
             cfg.put("apiKey", apiKey);
         }
+        if (!llmApiKey.isBlank()) {
+            cfg.put("llmApiKey", llmApiKey);
+        }
+        if (!embedApiKey.isBlank()) {
+            cfg.put("embedApiKey", embedApiKey);
+        }
         cfg.put("outboundAllowed", getBoolean("ai.outbound_allowed", true));
         cfg.put("classifierEnabled", getBoolean("ai.classifier.enabled", true));
-        cfg.put("timeoutMs", getInt("ai.timeout_ms", 60000));
+        cfg.put("timeoutMs", getInt("ai.timeout_ms", 600000));
         cfg.put("autoApproveEnabled", getBoolean("ai.auto_approve.enabled", false));
         cfg.put("autoApproveConfidenceThreshold", getDouble("ai.auto_approve.confidence_threshold", 0.8));
         putIfPresent(cfg, "autoApproveFields", getString("ai.auto_approve.fields", "tag:*,overview"));
@@ -299,17 +318,18 @@ public class SysConfigService {
         }
     }
 
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
     public String effectiveOllamaBaseUrl() {
         String resolved = resolveOllamaBaseUrl();
         return resolved.isBlank() ? yamlOllamaBaseUrl : resolved;
-    }
-
-    private String resolveAiBaseUrl() {
-        String provider = getString("ai.default_provider", "ollama").toLowerCase(Locale.ROOT);
-        if ("openai-compatible".equals(provider)) {
-            return getString("ai.openai.base_url", "");
-        }
-        return resolveOllamaBaseUrl();
     }
 
     private String resolveOllamaBaseUrl() {

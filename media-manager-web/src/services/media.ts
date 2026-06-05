@@ -1,6 +1,6 @@
 import { request } from '@umijs/max';
 import type { ApiResponse, PageResult } from '@/types/api';
-import type { MediaItem } from '@/types/media';
+import type { MediaItem, MediaSubtitle } from '@/types/media';
 
 export interface GetItemsParams {
   libraryId?: number;
@@ -69,6 +69,17 @@ export interface IdentifyCandidate {
   date?: string;
 }
 
+export interface SubtitleSearchResult {
+  provider?: string;
+  externalId?: string;
+  title?: string;
+  language?: string;
+  format?: string;
+  releaseName?: string;
+  downloadUrl?: string;
+  score?: number;
+}
+
 export type MetadataUpdatePayload = object;
 
 export async function getItems(params: GetItemsParams) {
@@ -85,6 +96,17 @@ export async function getItemDetail(id: number) {
 
 export async function getItemSeasons(id: number) {
   return request<ApiResponse<SeasonItem[]>>(`/api/v1/items/${id}/seasons`, { method: 'GET' });
+}
+
+export async function getItemSubtitles(id: number) {
+  return request<ApiResponse<MediaSubtitle[]>>(`/api/v1/items/${id}/subtitles`, { method: 'GET' });
+}
+
+export async function searchOnlineSubtitles(id: number, q?: string, language?: string) {
+  return request<ApiResponse<SubtitleSearchResult[]>>(`/api/v1/items/${id}/subtitles/search`, {
+    method: 'GET',
+    params: { q, language },
+  });
 }
 
 export async function syncTvSeasons(id: number) {

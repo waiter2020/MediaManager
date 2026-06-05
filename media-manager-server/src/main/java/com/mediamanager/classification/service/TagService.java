@@ -22,22 +22,27 @@ public class TagService {
     private final TagRepository tagRepository;
     private final MediaItemRepository mediaItemRepository;
     private final LibraryAccessService libraryAccessService;
+    private final TagCanonicalizationService tagCanonicalizationService;
+    private final TagColorService tagColorService;
 
     public List<TagResponse> getAllTags() {
-        return tagRepository.findAll().stream()
+        return tagRepository.findGlobalUsageCounts().stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
     }
 
     @Transactional
     public TagResponse createTag(TagCreateRequest request) {
-        if (tagRepository.findByName(request.getName()).isPresent()) {
+        String tagName = tagCanonicalizationService.normalizeDisplayName(request.getName());
+        if (tagName.isBlank() || tagCanonicalizationService.findEquivalentTag(tagName).isPresent()) {
             throw new BusinessException(ErrorCode.TAG_NAME_EXISTS);
         }
 
         Tag tag = new Tag();
-        tag.setName(request.getName());
-        tag.setColor(request.getColor());
+        tag.setName(tagName);
+        tag.setColor(request.getColor() != null && !request.getColor().isBlank()
+                ? request.getColor()
+                : tagColorService.colorFor(tagName));
         tag.setSource("MANUAL");
 
         return toResponse(tagRepository.save(tag));
@@ -49,12 +54,13 @@ public class TagService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
 
         if (request.getName() != null) {
-            tagRepository.findByName(request.getName()).ifPresent(existing -> {
+            String tagName = tagCanonicalizationService.normalizeDisplayName(request.getName());
+            tagCanonicalizationService.findEquivalentTag(tagName).ifPresent(existing -> {
                 if (!existing.getId().equals(id)) {
                     throw new BusinessException(ErrorCode.TAG_NAME_EXISTS);
                 }
             });
-            tag.setName(request.getName());
+            tag.setName(tagName);
         }
         if (request.getColor() != null) {
             tag.setColor(request.getColor());
@@ -107,7 +113,19 @@ public class TagService {
         response.setName(tag.getName());
         response.setColor(tag.getColor());
         response.setSource(tag.getSource());
+        response.setUsageCount(0L);
         response.setCreatedAt(tag.getCreatedAt());
         return response;
+    }
+
+    private TagResponse toResponse(TagRepository.TagUsageProjection row) {
+        return TagResponse.builder()
+                .id(row.getTagId())
+                .name(row.getTagName())
+                .color(row.getColor())
+                .source(row.getSource())
+                .usageCount(row.getUsageCount() != null ? row.getUsageCount() : 0L)
+                .createdAt(row.getCreatedAt())
+                .build();
     }
 }

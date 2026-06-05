@@ -20,6 +20,13 @@ public class MediaItemResponse {
     private String overview;
     private String posterPath;
     private List<Integer> fileIds;
+    private List<TagDto> tags;
+    private List<CategoryDto> categories;
     /** Seconds from start when returned from playback history (continue watching). */
     private Integer playbackPosition;
+    private Integer playbackDuration;
+    private Double playbackPercent;
+    private Boolean watched;
+    private Boolean favorited;
+    private Boolean watchlisted;
 }

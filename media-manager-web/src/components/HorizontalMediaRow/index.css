@@ -1,5 +1,6 @@
 .horizontal-media-row {
   position: relative;
+  --row-item-width: 170px;
 }
 
 .horizontal-media-row .row-header {
@@ -42,19 +43,27 @@
 }
 
 .horizontal-media-row .row-scroll-item {
-  flex: 0 0 170px;
+  flex: 0 0 var(--row-item-width);
   scroll-snap-align: start;
 }
 
 @media (min-width: 1200px) {
+  .horizontal-media-row {
+    --row-item-width: 185px;
+  }
+
   .horizontal-media-row .row-scroll-item {
-    flex: 0 0 185px;
+    flex-basis: var(--row-item-width);
   }
 }
 
 @media (min-width: 1600px) {
+  .horizontal-media-row {
+    --row-item-width: 200px;
+  }
+
   .horizontal-media-row .row-scroll-item {
-    flex: 0 0 200px;
+    flex-basis: var(--row-item-width);
   }
 }
 
@@ -98,4 +107,34 @@
 .horizontal-media-row .scroll-btn:disabled {
   opacity: 0 !important;
   cursor: default;
+}
+
+@media (max-width: 640px) {
+  .horizontal-media-row {
+    --row-item-width: 136px;
+  }
+
+  .horizontal-media-row .row-header {
+    margin-bottom: 12px;
+  }
+
+  .horizontal-media-row .row-title {
+    font-size: 16px;
+  }
+
+  .horizontal-media-row .row-scroll {
+    gap: 12px;
+    margin-inline: -10px;
+    padding-inline: 10px;
+  }
+
+  .horizontal-media-row .scroll-btn {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .horizontal-media-row {
+    --row-item-width: 124px;
+  }
 }

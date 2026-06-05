@@ -3,7 +3,8 @@ services:
     build:
       context: .
       args:
-        # Default profile uses China-friendly mirrors; override in .env if needed.
+        # 国内默认：DaoCloud 基础镜像 + 清华 apk + 阿里云 Maven；npm 见 NPM_REGISTRY
+        # 海外：复制 .env.example 中「海外示例」几行到 .env
         MIRROR_PROFILE: ${MIRROR_PROFILE:-cn}
         MAVEN_SETTINGS_FILE: ${MAVEN_SETTINGS_FILE:-settings.xml}
         DOCKER_HUB_MIRROR: ${DOCKER_HUB_MIRROR:-docker.m.daocloud.io}
@@ -15,42 +16,37 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     container_name: mediamanager
     extra_hosts:
+      # Linux: map host gateway; Windows/macOS Docker Desktop also resolve this name
       - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
     environment:
-      - JAVA_OPTS=${JAVA_OPTS:--Xmx1024m -Xms256m}
       - MEDIAMANAGER_AUTH_JWT_SECRET=${JWT_SECRET:-change-me-in-production-256-bit-key}
       - MEDIAMANAGER_FFMPEG_PATH=/usr/bin/ffmpeg
       - MEDIAMANAGER_FFPROBE_PATH=/usr/bin/ffprobe
+      # Ollama on host (semantic search / AI); override in .env or sys_config
       - MEDIAMANAGER_AI_OLLAMA_BASE_URL=${MEDIAMANAGER_AI_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      # Map host absolute paths (e.g. E:\Movies) stored in DB to container mount.
-      # Semicolon-separated: E:\Movies=/home/media;F:\TV=/media/tv
-      - MEDIAMANAGER_STORAGE_PATH_MAPPINGS=${MEDIAMANAGER_STORAGE_PATH_MAPPINGS:-}
-      - MEDIAMANAGER_STORAGE_PATH_MAP_FROM=${HOST_MEDIA_PATH:-./media}
+      # Map persisted host paths to the container mount.
+      # If playback returns 40404, set HOST_MEDIA_PATH to the host path stored in the DB,
+      # or override MEDIAMANAGER_STORAGE_PATH_MAP_FROM explicitly.
+      - MEDIAMANAGER_STORAGE_PATH_MAP_FROM=${MEDIAMANAGER_STORAGE_PATH_MAP_FROM:-${HOST_MEDIA_PATH:-./media}}
       - MEDIAMANAGER_STORAGE_PATH_MAP_TO=${MEDIAMANAGER_STORAGE_PATH_MAP_TO:-/home/media}
     volumes:
-      - ./data:/app/data
-      # Primary library mount — create libraries with path /home/media (not host E:\...).
+      - ./media:/media:ro # Optional: mount local media folder read-only
+      - ./data:/app/data  # Mount data for SQLite and cache storage
+
+      version: '3.8'
+
+    build: .
+      - ./media:/media:ro # Mount media read-only
+      # Optional extra library path (set in .env, e.g. TEST_MEDIA_PATH=E:\Videos)
+      # - ${TEST_MEDIA_PATH}:/home/test_media:ro
+      # Override HOST_MEDIA_PATH in .env (Windows example: E:\Movies)
       - ${HOST_MEDIA_PATH:-./media}:/home/media:ro
-      # Legacy alias: DB rows may still reference an old container prefix (e.g. /home/test_media).
-      # Mounts the same host folder so old file_path values remain valid until scan rewrites them.
-      - ${HOST_MEDIA_PATH:-./media}:${LEGACY_LIBRARY_MOUNT:-/home/test_media}:ro
-    networks:
-      - mm-net
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-          cpus: "2.0"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/api/v1/system/status"]
+      test: ["CMD", "curl", "-sf", "http://localhost/api/v1/system/status"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-
-networks:
-  mm-net:
-    driver: bridge

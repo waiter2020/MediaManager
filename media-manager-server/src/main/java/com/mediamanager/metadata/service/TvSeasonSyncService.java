@@ -11,7 +11,6 @@ import com.mediamanager.metadata.repository.TvShowMetadataRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -33,7 +32,6 @@ public class TvSeasonSyncService {
     private final TvShowMetadataRepository tvShowMetadataRepository;
     private final SeasonRepository seasonRepository;
 
-    @Transactional
     public void syncFromTmdb(MediaItem item, String apiKey, String tmdbTvId, String language) {
         if (item == null || !"TV_SHOW".equals(item.getType()) || tmdbTvId == null || tmdbTvId.isBlank()) {
             return;

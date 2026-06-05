@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Select, Table, Typography } from 'antd';
 import { PlayCircleFilled } from '@ant-design/icons';
 import { history } from '@umijs/max';
+import { openPlayerWindow } from '@/utils/playerWindow';
 
 export interface TvEpisode {
   id?: number;
@@ -86,7 +87,11 @@ const TvSeasonPanel: React.FC<Props> = ({ mediaItemId, seasons, onSync, syncing,
             type="link"
             size="small"
             icon={<PlayCircleFilled />}
-            onClick={() => history.push(`/player/${mediaItemId}?fileId=${ep.mediaFileId}`)}
+            onClick={() => {
+              if (!openPlayerWindow(mediaItemId, { fileId: ep.mediaFileId })) {
+                history.push(`/player/${mediaItemId}?fileId=${ep.mediaFileId}`);
+              }
+            }}
           >
             播放
           </Button>

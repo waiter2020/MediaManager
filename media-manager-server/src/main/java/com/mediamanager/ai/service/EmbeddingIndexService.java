@@ -2,6 +2,7 @@ package com.mediamanager.ai.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mediamanager.ai.AiTaskType;
 import com.mediamanager.ai.entity.MediaEmbedding;
 import com.mediamanager.ai.repository.MediaEmbeddingRepository;
 import com.mediamanager.classification.entity.Category;
@@ -33,11 +34,12 @@ public class EmbeddingIndexService {
     private final ObjectMapper objectMapper;
 
     private String getActiveModelId() {
-        Map<String, Object> config = aiOrchestrator.defaultConfig();
-        return String.valueOf(config.getOrDefault("embedModel", "nomic-embed-text"));
+        Map<String, Object> config = aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT);
+        String providerId = String.valueOf(config.getOrDefault("providerId", "ollama"));
+        String modelId = String.valueOf(config.getOrDefault("embedModel", "nomic-embed-text"));
+        return providerId + ":" + modelId;
     }
 
-    @Transactional
     public void indexItem(MediaItem item) {
         String text = buildIndexText(item);
         if (text.isBlank()) {

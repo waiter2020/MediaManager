@@ -26,6 +26,7 @@ public class MediaPostProcessService {
     private final MediaItemRepository mediaItemRepository;
     private final MediaFileRepository fileRepository;
     private final ThumbnailService thumbnailService;
+    private final MediaChapterService mediaChapterService;
 
     public MediaPostProcessService(
             @Lazy ClassificationEngine classificationEngine,
@@ -34,7 +35,8 @@ public class MediaPostProcessService {
             FtsIndexService ftsIndexService,
             MediaItemRepository mediaItemRepository,
             MediaFileRepository fileRepository,
-            ThumbnailService thumbnailService) {
+            ThumbnailService thumbnailService,
+            MediaChapterService mediaChapterService) {
         this.classificationEngine = classificationEngine;
         this.aiOrchestrator = aiOrchestrator;
         this.embeddingIndexService = embeddingIndexService;
@@ -42,27 +44,57 @@ public class MediaPostProcessService {
         this.mediaItemRepository = mediaItemRepository;
         this.fileRepository = fileRepository;
         this.thumbnailService = thumbnailService;
+        this.mediaChapterService = mediaChapterService;
     }
 
     public void afterMetadataUpdated(MediaItem item) {
+        Integer itemId = item != null ? item.getId() : null;
         try {
-            classificationEngine.executeClassification(item);
-            if (item.getOverview() == null || item.getOverview().isBlank()) {
-                aiOrchestrator.completeMetadataAsync(item.getId());
+            if (itemId == null) {
+                return;
             }
-            syncSearchIndexes(item);
+            mediaChapterService.ensureChaptersForItem(item);
+            MediaItem processedItem = classificationEngine.executeClassification(item);
+            if (processedItem.getOverview() == null || processedItem.getOverview().isBlank()) {
+                aiOrchestrator.completeMetadataAsync(processedItem.getId());
+            }
+            processedItem = ensurePosterThumbnail(processedItem);
+            syncSearchIndexes(processedItem);
 
-            // Asynchronously generate dynamic video previews (animated WebP)
-            if ("MOVIE".equals(item.getType()) || "TV_SHOW".equals(item.getType())) {
-                List<MediaFile> files = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
-                if (!files.isEmpty()) {
-                    MediaFile primaryFile = files.get(0);
-                    thumbnailService.generatePreviewWebp(item.getId(), primaryFile.getFilePath());
-                }
-            }
         } catch (Exception e) {
-            log.warn("Post-process failed for item {}: {}", item.getId(), e.getMessage());
+            log.warn("Post-process failed for item {}: {}", itemId, e.getMessage());
         }
+    }
+
+    private MediaItem ensurePosterThumbnail(MediaItem item) {
+        if (item == null || item.getId() == null || hasText(item.getPosterPath()) || !isVideoItem(item)) {
+            return item;
+        }
+        List<MediaFile> files = fileRepository.findByMediaItemIdAndDeletedFalse(item.getId());
+        if (files.isEmpty() || !hasText(files.get(0).getFilePath())) {
+            return item;
+        }
+        String thumbnailPath = thumbnailService.generateThumbnail(item.getId(), files.get(0).getFilePath());
+        if (!hasText(thumbnailPath)) {
+            return item;
+        }
+        return mediaItemRepository.findById(item.getId())
+                .map(current -> {
+                    if (!hasText(current.getPosterPath())) {
+                        current.setPosterPath(thumbnailPath);
+                        return mediaItemRepository.save(current);
+                    }
+                    return current;
+                })
+                .orElse(item);
+    }
+
+    private static boolean isVideoItem(MediaItem item) {
+        return "MOVIE".equals(item.getType()) || "TV_SHOW".equals(item.getType()) || "EPISODE".equals(item.getType());
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     /** Keeps FTS and vector indexes aligned with item visibility and metadata. */
@@ -70,12 +102,14 @@ public class MediaPostProcessService {
         if (item == null || item.getId() == null) {
             return;
         }
-        if (Boolean.TRUE.equals(item.getHidden())) {
-            removeSearchIndexes(item.getId());
+        MediaItem indexedItem = mediaItemRepository.findByIdWithClassificationGraph(item.getId())
+                .orElse(item);
+        if (Boolean.TRUE.equals(indexedItem.getHidden())) {
+            removeSearchIndexes(indexedItem.getId());
             return;
         }
-        ftsIndexService.indexItem(item);
-        embeddingIndexService.indexItem(item);
+        ftsIndexService.indexItem(indexedItem);
+        embeddingIndexService.indexItem(indexedItem);
     }
 
     public void removeSearchIndexes(Integer itemId) {
@@ -86,7 +120,7 @@ public class MediaPostProcessService {
         embeddingIndexService.removeItem(itemId);
     }
 
-    @Async
+    @Async("postProcessExecutor")
     public void afterMetadataUpdatedAsync(Integer itemId) {
         mediaItemRepository.findById(itemId).ifPresent(this::afterMetadataUpdated);
     }

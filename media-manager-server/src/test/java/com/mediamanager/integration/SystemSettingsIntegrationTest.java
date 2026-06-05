@@ -115,10 +115,17 @@ class SystemSettingsIntegrationTest extends IntegrationTestSupport {
     void aiConfigRoundTrip() throws Exception {
         String updateBody = "{"
                 + "\"defaultProvider\":\"openai-compatible\","
+                + "\"llmProvider\":\"openai-compatible\","
+                + "\"embedProvider\":\"ollama\","
                 + "\"openaiBaseUrl\":\"https://api.openai-test.com/v1\","
                 + "\"openaiApiKey\":\"my-secret-key\","
+                + "\"openaiLlmBaseUrl\":\"https://llm.openai-test.com/v1\","
+                + "\"openaiLlmApiKey\":\"llm-secret-key\","
+                + "\"openaiEmbedBaseUrl\":\"https://embed.openai-test.com/v1\","
+                + "\"openaiEmbedApiKey\":\"embed-secret-key\","
+                + "\"ollamaBaseUrl\":\"http://localhost:11434\","
                 + "\"llmModel\":\"gpt-4o-mini\","
-                + "\"embedModel\":\"text-embedding-3-small\","
+                + "\"embedModel\":\"nomic-embed-text\","
                 + "\"classifierEnabled\":false,"
                 + "\"outboundAllowed\":true,"
                 + "\"timeoutMs\":20000"
@@ -130,10 +137,16 @@ class SystemSettingsIntegrationTest extends IntegrationTestSupport {
                         .content(updateBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.defaultProvider").value("openai-compatible"))
+                .andExpect(jsonPath("$.data.llmProvider").value("openai-compatible"))
+                .andExpect(jsonPath("$.data.embedProvider").value("ollama"))
                 .andExpect(jsonPath("$.data.openaiBaseUrl").value("https://api.openai-test.com/v1"))
                 .andExpect(jsonPath("$.data.openaiApiKey").value("***"))
+                .andExpect(jsonPath("$.data.openaiLlmBaseUrl").value("https://llm.openai-test.com/v1"))
+                .andExpect(jsonPath("$.data.openaiLlmApiKey").value("***"))
+                .andExpect(jsonPath("$.data.openaiEmbedBaseUrl").value("https://embed.openai-test.com/v1"))
+                .andExpect(jsonPath("$.data.openaiEmbedApiKey").value("***"))
                 .andExpect(jsonPath("$.data.llmModel").value("gpt-4o-mini"))
-                .andExpect(jsonPath("$.data.embedModel").value("text-embedding-3-small"))
+                .andExpect(jsonPath("$.data.embedModel").value("nomic-embed-text"))
                 .andExpect(jsonPath("$.data.classifierEnabled").value(false))
                 .andExpect(jsonPath("$.data.outboundAllowed").value(true))
                 .andExpect(jsonPath("$.data.timeoutMs").value(20000));
@@ -142,7 +155,11 @@ class SystemSettingsIntegrationTest extends IntegrationTestSupport {
                         .header("Authorization", adminToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.defaultProvider").value("openai-compatible"))
+                .andExpect(jsonPath("$.data.llmProvider").value("openai-compatible"))
+                .andExpect(jsonPath("$.data.embedProvider").value("ollama"))
                 .andExpect(jsonPath("$.data.openaiApiKey").value("***"))
+                .andExpect(jsonPath("$.data.openaiLlmApiKey").value("***"))
+                .andExpect(jsonPath("$.data.openaiEmbedApiKey").value("***"))
                 .andExpect(jsonPath("$.data.llmModel").value("gpt-4o-mini"));
     }
 
@@ -151,5 +168,16 @@ class SystemSettingsIntegrationTest extends IntegrationTestSupport {
         mockMvc.perform(get("/api/v1/system/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.theme").exists());
+    }
+
+    @Test
+    void capabilitiesEndpointReturnsRuntimeSnapshot() throws Exception {
+        mockMvc.perform(get("/api/v1/system/capabilities")
+                        .header("Authorization", adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ffmpegAvailable").exists())
+                .andExpect(jsonPath("$.data.ffprobeAvailable").exists())
+                .andExpect(jsonPath("$.data.ffmpegPath").exists())
+                .andExpect(jsonPath("$.data.ffprobePath").exists());
     }
 }

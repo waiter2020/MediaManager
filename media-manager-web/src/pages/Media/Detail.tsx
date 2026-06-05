@@ -7,6 +7,7 @@ import {
   Modal,
   Popconfirm,
   Result,
+  Select,
   Spin,
   Tabs,
   Tag,
@@ -15,27 +16,33 @@ import {
 } from 'antd';
 import { history, useAccess, useParams } from '@umijs/max';
 import {
+  AppstoreAddOutlined,
   ArrowLeftOutlined,
   AudioOutlined,
   CameraOutlined,
+  CheckCircleOutlined,
   ClockCircleOutlined,
   CustomerServiceOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   FileOutlined,
+  FileTextOutlined,
+  GlobalOutlined,
   HddOutlined,
   HeartFilled,
   HeartOutlined,
   PictureOutlined,
   PlayCircleFilled,
   ReloadOutlined,
+  SearchOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import HorizontalMediaRow from '@/components/HorizontalMediaRow';
 import IdentifyModal from '@/components/IdentifyModal';
 import TagSelect from '@/components/TagSelect';
 import TvSeasonPanel, { type TvSeason } from '@/components/TvSeasonPanel';
+import { openPlayerWindow } from '@/utils/playerWindow';
 import { addTagToItem, getTags, removeTagFromItem, type CategoryItem, type TagItem } from '@/services/classification';
 import {
   classifyItem,
@@ -46,17 +53,33 @@ import {
   getItemSeasons,
   getSimilarItems,
   refreshMetadata,
+  searchOnlineSubtitles,
   syncTvSeasons,
   updateMetadata,
+  type SubtitleSearchResult,
 } from '@/services/media';
-import { getRawImageUrl, resolveItemBackdropUrl, resolveItemPosterUrl } from '@/services/stream';
-import { checkFavorite, toggleFavorite } from '@/services/userActivity';
-import type { MediaFile, MediaItem } from '@/types/media';
+import {
+  getChapterThumbnailUrl,
+  getFileStreamUrl,
+  getRawImageUrl,
+  resolveItemBackdropUrl,
+  resolveItemPosterUrl,
+} from '@/services/stream';
+import {
+  addItemsToCollection,
+  createCollection,
+  listCollections,
+  type MediaCollection,
+} from '@/services/collection';
+import { checkFavorite, checkWatchlist, setWatched, toggleFavorite, toggleWatchlist } from '@/services/userActivity';
+import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
+import type { MediaChapter, MediaFile, MediaItem } from '@/types/media';
 import './Detail.css';
 
 const TYPE_LABELS: Record<string, string> = {
   MOVIE: '电影',
   TV_SHOW: '剧集',
+  EPISODE: '剧集',
   IMAGE: '图片',
   AUDIO: '音频',
 };
@@ -64,9 +87,12 @@ const TYPE_LABELS: Record<string, string> = {
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   MOVIE: <VideoCameraOutlined />,
   TV_SHOW: <VideoCameraOutlined />,
+  EPISODE: <VideoCameraOutlined />,
   IMAGE: <PictureOutlined />,
   AUDIO: <CustomerServiceOutlined />,
 };
+
+const PREVIEWABLE_TYPES = new Set(['MOVIE', 'TV_SHOW', 'EPISODE']);
 
 interface MediaDetailItem extends MediaItem {
   tvShowMetadata?: {
@@ -103,6 +129,16 @@ const fmtDur = (seconds?: number) => {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m} 分钟`;
+};
+
+const fmtChapterTime = (seconds?: number) => {
+  const value = Math.max(0, Math.floor(seconds || 0));
+  const h = Math.floor(value / 3600);
+  const m = Math.floor((value % 3600) / 60);
+  const s = value % 60;
+  return h > 0
+    ? `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
 
 const joinValue = (value?: string[] | string) => (Array.isArray(value) ? value.join(' / ') : value);
@@ -209,15 +245,31 @@ const MediaDetail: React.FC = () => {
   const [editVisible, setEditVisible] = useState(false);
   const [editForm] = Form.useForm<EditableMetadata>();
   const [isFavorited, setIsFavorited] = useState(false);
+  const [isWatched, setIsWatched] = useState(false);
+  const [isWatchlisted, setIsWatchlisted] = useState(false);
+  const [collectionOpen, setCollectionOpen] = useState(false);
+  const [collections, setCollections] = useState<MediaCollection[]>([]);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<number | undefined>();
+  const [newCollectionName, setNewCollectionName] = useState('');
+  const [collectionSaving, setCollectionSaving] = useState(false);
   const [allTags, setAllTags] = useState<TagItem[]>([]);
   const [addingTag, setAddingTag] = useState(false);
   const [addTagSelectValue, setAddTagSelectValue] = useState<number | undefined>();
   const [identifyVisible, setIdentifyVisible] = useState(false);
+  const [posterHovered, setPosterHovered] = useState(false);
+  const [posterPreviewVideoError, setPosterPreviewVideoError] = useState(false);
+  const [hoveredChapterId, setHoveredChapterId] = useState<number | null>(null);
+  const [chapterPreviewErrorIds, setChapterPreviewErrorIds] = useState<number[]>([]);
   const [seasons, setSeasons] = useState<TvSeason[]>([]);
   const [similarItems, setSimilarItems] = useState<MediaItem[]>([]);
   const [similarHint, setSimilarHint] = useState<string | null>(null);
   const [similarLoading, setSimilarLoading] = useState(false);
   const [seasonSyncing, setSeasonSyncing] = useState(false);
+  const [subtitleSearchVisible, setSubtitleSearchVisible] = useState(false);
+  const [subtitleSearchQuery, setSubtitleSearchQuery] = useState('');
+  const [subtitleLanguage, setSubtitleLanguage] = useState('zh-CN');
+  const [subtitleSearchLoading, setSubtitleSearchLoading] = useState(false);
+  const [subtitleResults, setSubtitleResults] = useState<SubtitleSearchResult[]>([]);
 
   const numericId = Number(id);
 
@@ -226,11 +278,19 @@ const MediaDetail: React.FC = () => {
     try {
       const basic = await getItem(numericId);
       setPlaybackPosition(basic.code === 200 && basic.data?.playbackPosition != null ? Number(basic.data.playbackPosition) || 0 : 0);
+      if (basic.code === 200 && basic.data) {
+        setIsWatched(!!basic.data.watched);
+        if (basic.data.favorited != null) setIsFavorited(!!basic.data.favorited);
+        if (basic.data.watchlisted != null) setIsWatchlisted(!!basic.data.watchlisted);
+      }
 
       const res = await getItemDetail(numericId);
       if (res.code === 200) {
         const item = res.data as MediaDetailItem;
         setData(item);
+        setIsWatched(!!item.watched);
+        if (item.favorited != null) setIsFavorited(!!item.favorited);
+        if (item.watchlisted != null) setIsWatchlisted(!!item.watchlisted);
         if (item?.type === 'TV_SHOW') {
           const seasonsRes = await getItemSeasons(numericId);
           if (seasonsRes.code === 200) setSeasons(seasonsRes.data || []);
@@ -245,10 +305,19 @@ const MediaDetail: React.FC = () => {
 
   useEffect(() => {
     if (!id) return;
+    setPosterHovered(false);
+    setPosterPreviewVideoError(false);
+    setHoveredChapterId(null);
+    setChapterPreviewErrorIds([]);
     fetchItem();
     checkFavorite(numericId)
       .then((res) => {
-        if (res?.code === 200) setIsFavorited(!!res.data?.favorite);
+        if (res?.code === 200) setIsFavorited(!!(res.data?.favorited ?? res.data?.favorite));
+      })
+      .catch(() => {});
+    checkWatchlist(numericId)
+      .then((res) => {
+        if (res?.code === 200) setIsWatchlisted(!!(res.data?.watchlisted ?? res.data?.watchlist));
       })
       .catch(() => {});
   }, [id]);
@@ -283,9 +352,69 @@ const MediaDetail: React.FC = () => {
   const handleToggleFavorite = async () => {
     const res = await toggleFavorite(numericId);
     if (res?.code === 200) {
-      const favorite = !!res.data?.favorite;
+      const favorite = !!(res.data?.favorited ?? res.data?.favorite);
       setIsFavorited(favorite);
       message.success(favorite ? '已收藏' : '已取消收藏');
+    }
+  };
+
+  const handleToggleWatchlist = async () => {
+    const res = await toggleWatchlist(numericId);
+    if (res?.code === 200) {
+      const watchlisted = !!(res.data?.watchlisted ?? res.data?.watchlist);
+      setIsWatchlisted(watchlisted);
+      message.success(watchlisted ? '已加入稍后看' : '已移出稍后看');
+    }
+  };
+
+  const handleToggleWatched = async () => {
+    const next = !isWatched;
+    const res = await setWatched(numericId, next);
+    if (res?.code === 200) {
+      setIsWatched(!!res.data?.watched);
+      message.success(res.data?.watched ? '已标记为已看' : '已标记为未看');
+      fetchItem();
+    }
+  };
+
+  const openCollectionModal = async () => {
+    setCollectionOpen(true);
+    setSelectedCollectionId(undefined);
+    setNewCollectionName('');
+    const res = await listCollections();
+    if (res.code === 200) {
+      setCollections(res.data || []);
+    }
+  };
+
+  const handleAddToCollection = async () => {
+    setCollectionSaving(true);
+    try {
+      if (selectedCollectionId) {
+        const res = await addItemsToCollection(selectedCollectionId, [numericId]);
+        if (res.code === 200) {
+          message.success('已加入合集');
+          setCollectionOpen(false);
+        }
+        return;
+      }
+      const name = newCollectionName.trim();
+      if (!name) {
+        message.warning('请选择合集或输入新合集名称');
+        return;
+      }
+      const res = await createCollection({
+        name,
+        type: 'COLLECTION',
+        visibility: 'PRIVATE',
+        itemIds: [numericId],
+      });
+      if (res.code === 200) {
+        message.success('已创建合集并加入当前媒体');
+        setCollectionOpen(false);
+      }
+    } finally {
+      setCollectionSaving(false);
     }
   };
 
@@ -369,6 +498,30 @@ const MediaDetail: React.FC = () => {
     }
   };
 
+  const handleOpenSubtitleSearch = () => {
+    setSubtitleSearchQuery(data?.title || '');
+    setSubtitleResults([]);
+    setSubtitleSearchVisible(true);
+  };
+
+  const handleSearchSubtitles = async () => {
+    setSubtitleSearchLoading(true);
+    try {
+      const res = await searchOnlineSubtitles(numericId, subtitleSearchQuery || data?.title, subtitleLanguage);
+      if (res.code === 200) {
+        const results = res.data || [];
+        setSubtitleResults(results);
+        if (results.length === 0) {
+          message.info('暂无在线字幕结果，请确认已配置字幕搜索提供方');
+        }
+      } else {
+        message.error(res.message || '字幕搜索失败');
+      }
+    } finally {
+      setSubtitleSearchLoading(false);
+    }
+  };
+
   if (loading) return <div className="detail-loading"><Spin size="large" /></div>;
   if (!data) return <Result status="404" title="未找到媒体记录" />;
 
@@ -388,6 +541,10 @@ const MediaDetail: React.FC = () => {
     thumbnailWidth: 400,
   });
   const year = data.releaseDate ? data.releaseDate.substring(0, 4) : null;
+  const canPreviewPoster = PREVIEWABLE_TYPES.has(data.type);
+  const posterPreviewVideoUrl = data.fileIds?.length ? getFileStreamUrl(data.fileIds[0]) : null;
+  const showPosterVideoPreview =
+    posterHovered && canPreviewPoster && !!posterPreviewVideoUrl && !posterPreviewVideoError;
   const vm = buildMetadata(data);
   const overviewFields = vm.overview.filter((field) => field.value != null && field.value !== '');
   const metadataFields = vm.metadata.filter((field) => field.value != null && field.value !== '');
@@ -433,7 +590,9 @@ const MediaDetail: React.FC = () => {
           icon={<PlayCircleFilled />}
           onClick={() => {
             const t = playbackPosition && playbackPosition > 30 ? playbackPosition : 0;
-            history.push(`/player/${data.id}${t > 0 ? `?t=${t}` : ''}`);
+            if (!openPlayerWindow(data.id, { position: t })) {
+              history.push(`/player/${data.id}${t > 0 ? `?t=${t}` : ''}`);
+            }
           }}
         >
           {playbackPosition && playbackPosition > 30 ? '继续观看' : '播放'}
@@ -441,6 +600,97 @@ const MediaDetail: React.FC = () => {
       );
     }
     return null;
+  };
+
+  const openChapter = (chapter: MediaChapter) => {
+    if (!access.canPlayMedia) return;
+    const options = { fileId: chapter.mediaFileId, position: chapter.startSeconds };
+    if (!openPlayerWindow(data.id, options)) {
+      history.push(
+        `/player/${data.id}?fileId=${chapter.mediaFileId}&t=${Math.max(0, Math.floor(chapter.startSeconds))}`,
+      );
+    }
+  };
+
+  const renderChapters = () => {
+    const chapters = data.chapters || [];
+    if (chapters.length === 0) return null;
+    return (
+      <section className="detail-chapters-section">
+        <div className="detail-chapters-header">
+          <h3 className="detail-section-title">章节</h3>
+          <Typography.Text type="secondary">
+            {access.canPlayMedia ? '悬停预览，点击从该时间播放' : `${chapters.length} 个章节`}
+          </Typography.Text>
+        </div>
+        <div className="detail-chapters-strip">
+          {chapters.map((chapter) => {
+            const previewing =
+              access.canPlayMedia &&
+              hoveredChapterId === chapter.id &&
+              !chapterPreviewErrorIds.includes(chapter.id);
+            const previewEnd =
+              chapter.endSeconds && chapter.endSeconds > chapter.startSeconds
+                ? Math.min(chapter.endSeconds, chapter.startSeconds + 20)
+                : chapter.startSeconds + 20;
+            return (
+              <button
+                key={chapter.id}
+                type="button"
+                className="detail-chapter-card"
+                aria-disabled={!access.canPlayMedia}
+                onMouseEnter={() => access.canPlayMedia && setHoveredChapterId(chapter.id)}
+                onMouseLeave={() => setHoveredChapterId((current) => (current === chapter.id ? null : current))}
+                onFocus={() => access.canPlayMedia && setHoveredChapterId(chapter.id)}
+                onBlur={() => setHoveredChapterId((current) => (current === chapter.id ? null : current))}
+                onClick={() => openChapter(chapter)}
+              >
+                <span className="detail-chapter-visual">
+                  {chapter.thumbnailAvailable ? (
+                    <img src={getChapterThumbnailUrl(chapter.id)} alt={chapter.title || '章节缩略图'} loading="lazy" />
+                  ) : (
+                    <span className="detail-chapter-placeholder">
+                      <VideoCameraOutlined />
+                    </span>
+                  )}
+                  {previewing && (
+                    <video
+                      className="detail-chapter-preview"
+                      src={getFileStreamUrl(chapter.mediaFileId)}
+                      muted
+                      playsInline
+                      preload="metadata"
+                      onLoadedMetadata={(event) => {
+                        event.currentTarget.currentTime = Math.max(0, chapter.startSeconds);
+                        event.currentTarget.play().catch(() => {
+                          setChapterPreviewErrorIds((ids) => [...new Set([...ids, chapter.id])]);
+                        });
+                      }}
+                      onTimeUpdate={(event) => {
+                        if (event.currentTarget.currentTime >= previewEnd) {
+                          event.currentTarget.currentTime = Math.max(0, chapter.startSeconds);
+                          event.currentTarget.play().catch(() => {});
+                        }
+                      }}
+                      onError={() => {
+                        setChapterPreviewErrorIds((ids) => [...new Set([...ids, chapter.id])]);
+                      }}
+                    />
+                  )}
+                  <span className="detail-chapter-time">{fmtChapterTime(chapter.startSeconds)}</span>
+                  {access.canPlayMedia && (
+                    <span className="detail-chapter-play">
+                      <PlayCircleFilled />
+                    </span>
+                  )}
+                </span>
+                <span className="detail-chapter-title">{chapter.title || `章节 ${chapter.chapterIndex + 1}`}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    );
   };
 
   const renderOverviewTab = () => (
@@ -464,6 +714,7 @@ const MediaDetail: React.FC = () => {
           ))}
         </div>
       )}
+      {renderChapters()}
       <div className="detail-tags-section">
         <h3 className="detail-section-title">标签与分类</h3>
         <div className="detail-tags">
@@ -572,6 +823,40 @@ const MediaDetail: React.FC = () => {
     );
   };
 
+  const renderSubtitlesTab = () => {
+    const subtitles = data.subtitles || [];
+    return (
+      <div className="detail-subtitle-panel">
+        <div className="detail-subtitle-toolbar">
+          <Typography.Text type="secondary">已发现 {subtitles.length} 条本地字幕</Typography.Text>
+          <Button icon={<SearchOutlined />} onClick={handleOpenSubtitleSearch}>
+            在线搜索字幕
+          </Button>
+        </div>
+        {subtitles.length === 0 ? (
+          <div className="detail-empty-line">暂无本地字幕</div>
+        ) : (
+          <div className="detail-subtitle-list">
+            {subtitles.map((subtitle) => (
+              <div key={subtitle.id} className="detail-subtitle-row">
+                <FileTextOutlined className="subtitle-row-icon" />
+                <div className="subtitle-row-main">
+                  <div className="subtitle-row-title">{subtitle.title || subtitle.fileName || 'Subtitle'}</div>
+                  <div className="subtitle-row-meta">
+                    <span>{subtitle.language || 'und'}</span>
+                    {subtitle.format && <span>{subtitle.format.toUpperCase()}</span>}
+                    {subtitle.source && <span>{subtitle.source}</span>}
+                    {subtitle.forced && <span>Forced</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="detail-page">
       <button className="detail-back" onClick={() => history.push('/browse')}>
@@ -582,8 +867,32 @@ const MediaDetail: React.FC = () => {
         {backdropUrl && <div className="detail-hero-bg" style={{ backgroundImage: `url(${backdropUrl})` }} />}
         <div className="detail-hero-gradient" />
         <div className="detail-hero-content">
-          <div className="detail-poster">
-            {posterUrl ? <img src={posterUrl} alt={data.title} /> : <div className="detail-poster-placeholder">{TYPE_ICONS[data.type] || <FileOutlined />}</div>}
+          <div
+            className="detail-poster"
+            onMouseEnter={() => setPosterHovered(true)}
+            onMouseLeave={() => setPosterHovered(false)}
+          >
+            {posterUrl ? (
+              <img className="detail-poster-image" src={posterUrl} alt={data.title} />
+            ) : (
+              <div className="detail-poster-placeholder">{TYPE_ICONS[data.type] || <FileOutlined />}</div>
+            )}
+            {showPosterVideoPreview && (
+              <video
+                className="detail-poster-preview detail-poster-preview-video"
+                src={posterPreviewVideoUrl || undefined}
+                muted
+                playsInline
+                preload="metadata"
+                onLoadedMetadata={(event) => {
+                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPosterPreviewVideoError(true));
+                }}
+                onEnded={(event) => {
+                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPosterPreviewVideoError(true));
+                }}
+                onError={() => setPosterPreviewVideoError(true)}
+              />
+            )}
           </div>
           <div className="detail-hero-info">
             <h1 className="detail-title">
@@ -596,6 +905,15 @@ const MediaDetail: React.FC = () => {
               {renderPrimaryAction()}
               <Button icon={isFavorited ? <HeartFilled /> : <HeartOutlined />} onClick={handleToggleFavorite} danger={isFavorited}>
                 {isFavorited ? '已收藏' : '收藏'}
+              </Button>
+              <Button icon={<ClockCircleOutlined />} onClick={handleToggleWatchlist} type={isWatchlisted ? 'primary' : 'default'}>
+                {isWatchlisted ? '已加入稍后看' : '稍后看'}
+              </Button>
+              <Button icon={<CheckCircleOutlined />} onClick={handleToggleWatched}>
+                {isWatched ? '标记未看' : '标记已看'}
+              </Button>
+              <Button icon={<AppstoreAddOutlined />} onClick={openCollectionModal}>
+                加入合集
               </Button>
               {access.canEditMetadata && (
                 <Button
@@ -634,6 +952,9 @@ const MediaDetail: React.FC = () => {
           items={[
             { key: 'overview', label: '概览', children: renderOverviewTab() },
             { key: 'metadata', label: '元数据', children: renderMetadataTab() },
+            ...(PREVIEWABLE_TYPES.has(data.type)
+              ? [{ key: 'subtitles', label: `字幕${data.subtitles?.length ? ` (${data.subtitles.length})` : ''}`, children: renderSubtitlesTab() }]
+              : []),
             { key: 'files', label: `文件${data.files?.length ? ` (${data.files.length})` : ''}`, children: renderFilesTab() },
           ]}
         />
@@ -656,6 +977,89 @@ const MediaDetail: React.FC = () => {
             </>
           )}
         </Form>
+      </Modal>
+
+      <Modal
+        title="加入合集"
+        open={collectionOpen}
+        onCancel={() => setCollectionOpen(false)}
+        onOk={handleAddToCollection}
+        confirmLoading={collectionSaving}
+        okText="加入"
+      >
+        <div style={{ display: 'grid', gap: 16, marginTop: 16 }}>
+          <Select
+            allowClear
+            placeholder="选择已有合集"
+            value={selectedCollectionId}
+            onChange={setSelectedCollectionId}
+            options={collections
+              .filter((collection) => !collection.smart)
+              .map((collection) => ({
+                label: `${collection.name} (${collection.itemCount || 0})`,
+                value: collection.id,
+              }))}
+          />
+          <Input
+            placeholder="或输入新合集名称"
+            value={newCollectionName}
+            onChange={(event) => setNewCollectionName(event.target.value)}
+            disabled={selectedCollectionId != null}
+            maxLength={128}
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title="在线字幕搜索"
+        open={subtitleSearchVisible}
+        onCancel={() => setSubtitleSearchVisible(false)}
+        footer={null}
+        width={640}
+      >
+        <div className="subtitle-search-form">
+          <Input
+            prefix={<GlobalOutlined />}
+            placeholder="影片名、剧集名或文件名"
+            value={subtitleSearchQuery}
+            onChange={(event) => setSubtitleSearchQuery(event.target.value)}
+            onPressEnter={handleSearchSubtitles}
+          />
+          <Input
+            className="subtitle-language-input"
+            value={subtitleLanguage}
+            onChange={(event) => setSubtitleLanguage(event.target.value)}
+            placeholder="语言"
+          />
+          <Button type="primary" icon={<SearchOutlined />} loading={subtitleSearchLoading} onClick={handleSearchSubtitles}>
+            搜索
+          </Button>
+        </div>
+        <div className="subtitle-search-results">
+          {subtitleResults.length === 0 ? (
+            <div className="detail-empty-line">暂无搜索结果</div>
+          ) : (
+            subtitleResults.map((result) => (
+              <div key={`${result.provider}-${result.externalId}-${result.title}`} className="detail-subtitle-row">
+                <GlobalOutlined className="subtitle-row-icon" />
+                <div className="subtitle-row-main">
+                  <div className="subtitle-row-title">{result.title || result.releaseName || result.externalId}</div>
+                  <div className="subtitle-row-meta">
+                    {result.provider && <span>{result.provider}</span>}
+                    {result.language && <span>{result.language}</span>}
+                    {result.format && <span>{result.format.toUpperCase()}</span>}
+                    {result.score != null && <span>{result.score.toFixed(1)}</span>}
+                  </div>
+                </div>
+                {result.downloadUrl && (
+                  <Button size="small" onClick={() => window.open(result.downloadUrl, '_blank')}>
+                    打开
+                  </Button>
+                )}
+              </div>
+            ))
+          )}
+        </div>
       </Modal>
     </div>
   );

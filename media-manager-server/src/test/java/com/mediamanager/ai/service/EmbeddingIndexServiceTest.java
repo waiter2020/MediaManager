@@ -1,5 +1,6 @@
 package com.mediamanager.ai.service;
 
+import com.mediamanager.ai.AiTaskType;
 import com.mediamanager.ai.entity.MediaEmbedding;
 import com.mediamanager.ai.repository.MediaEmbeddingRepository;
 import com.mediamanager.media.entity.MediaItem;
@@ -43,6 +44,8 @@ class EmbeddingIndexServiceTest {
         MediaItem item = MediaItem.builder().id(1).title("Test").hidden(false).build();
         when(itemRepository.findAll()).thenReturn(List.of(item));
         when(aiOrchestrator.embedText(anyString(), any())).thenReturn(new float[] {1f, 0f});
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT))
+                .thenReturn(java.util.Map.of("providerId", "ollama", "embedModel", "default"));
 
         int count = embeddingIndexService.rebuildAll();
 
@@ -67,22 +70,23 @@ class EmbeddingIndexServiceTest {
         float[] vec = {1f, 0f};
         MediaEmbedding sourceEmb = MediaEmbedding.builder()
                 .mediaItemId(1)
-                .modelId("default")
+                .modelId("ollama:default")
                 .vector(toBytes(vec))
                 .updatedAt(Instant.now())
                 .build();
         MediaEmbedding otherEmb = MediaEmbedding.builder()
                 .mediaItemId(2)
-                .modelId("default")
+                .modelId("ollama:default")
                 .vector(toBytes(vec))
                 .updatedAt(Instant.now())
                 .build();
-        when(aiOrchestrator.defaultConfig()).thenReturn(java.util.Map.of("embedModel", "default"));
-        when(embeddingRepository.findByMediaItemIdAndModelId(1, "default"))
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT))
+                .thenReturn(java.util.Map.of("providerId", "ollama", "embedModel", "default"));
+        when(embeddingRepository.findByMediaItemIdAndModelId(1, "ollama:default"))
                 .thenReturn(Optional.of(sourceEmb));
         
         when(itemRepository.findVisibleIdsByLibraryIdsIn(Set.of(10))).thenReturn(List.of(1, 2));
-        when(embeddingRepository.findByModelIdAndMediaItemIdIn("default", List.of(1, 2)))
+        when(embeddingRepository.findByModelIdAndMediaItemIdIn("ollama:default", List.of(1, 2)))
                 .thenReturn(List.of(sourceEmb, otherEmb));
 
         List<EmbeddingIndexService.Scored> results =

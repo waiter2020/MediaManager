@@ -9,11 +9,14 @@ spring:
 
   # Database
   datasource:
-    url: jdbc:sqlite:${MEDIA_MANAGER_DATA_DIR:./data}/mediamanager.db?journal_mode=WAL&busy_timeout=30000
+    url: jdbc:sqlite:${MEDIA_MANAGER_DATA_DIR:./data}/mediamanager.db?journal_mode=WAL&busy_timeout=60000
     driver-class-name: org.sqlite.JDBC
     hikari:
-      maximum-pool-size: 5
+      # SQLite has a single writer. Keep one pooled connection so app-level writes queue
+      # through Hikari instead of competing for SQLite's file lock.
+      maximum-pool-size: 1
       minimum-idle: 1
+      connection-timeout: 60000
       connection-test-query: SELECT 1
 
   # JPA
@@ -73,8 +76,12 @@ mediamanager:
     path: ffmpeg
   hls:
     segment-duration: 6
+  playback:
+    hardware-encoder: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ENCODER:h264_nvenc}
   ai:
-    default-provider: ollama
+    default-provider: ${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}
+    llm-provider: ${MEDIAMANAGER_AI_LLM_PROVIDER:${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}}
+    embed-provider: ${MEDIAMANAGER_AI_EMBED_PROVIDER:${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}}
     classifier:
       enabled: true
     ollama:

@@ -7,9 +7,15 @@ import lombok.Data;
 @Builder
 public class AiConfigDto {
     private String defaultProvider;
+    private String llmProvider;
+    private String embedProvider;
     private String ollamaBaseUrl;
     private String openaiBaseUrl;
     private String openaiApiKey;
+    private String openaiLlmBaseUrl;
+    private String openaiLlmApiKey;
+    private String openaiEmbedBaseUrl;
+    private String openaiEmbedApiKey;
     private String llmModel;
     private String embedModel;
     private Boolean classifierEnabled;

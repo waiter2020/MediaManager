@@ -402,11 +402,21 @@
 
 @media (max-width: 640px) {
   .libraries-page {
-    padding: 0 16px 16px;
+    padding: 0 10px 16px;
   }
 
   .libraries-header h2 {
     font-size: 20px;
+  }
+
+  .libraries-header > .ant-btn {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .libraries-summary {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .libraries-grid {
@@ -426,11 +436,49 @@
     gap: 10px;
   }
 
+  .libraries-toolbar-left,
+  .libraries-toolbar-right {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
   .libraries-toolbar-left .libraries-search {
     width: 100% !important;
   }
 
-  .libraries-toolbar-left {
-    width: 100%;
+  .libraries-toolbar-right .ant-select {
+    flex: 1 1 130px;
+    width: auto !important;
+  }
+
+  .library-card-top {
+    gap: 12px;
+  }
+
+  .library-card-actions {
+    flex-wrap: wrap;
+  }
+
+  .library-card-actions-spacer {
+    display: none;
+  }
+
+  .library-card-actions .ant-btn {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .libraries-page {
+    padding-inline: 6px;
+  }
+
+  .library-card-body {
+    padding: 14px;
+  }
+
+  .library-card-stats {
+    justify-content: space-between;
   }
 }

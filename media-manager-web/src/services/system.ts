@@ -39,6 +39,24 @@ export interface SystemCapabilities {
   ffmpegPath?: string;
   ffprobeAvailable?: boolean;
   ffprobePath?: string;
+  embeddingCount?: number;
+  hasIndexedVectors?: boolean;
+  embeddingAvailable?: boolean;
+  aiProvider?: string;
+  aiProviderName?: string;
+  llmProvider?: string;
+  llmProviderName?: string;
+  embedProvider?: string;
+  embedProviderName?: string;
+  embedModel?: string;
+  llmModel?: string;
+  aiBaseUrl?: string;
+  llmBaseUrl?: string;
+  embedBaseUrl?: string;
+  classifierEnabled?: boolean;
+  isNoopProvider?: boolean;
+  aiDegraded?: boolean;
+  aiDegradedReason?: string;
 }
 
 export interface SystemLogEvent {

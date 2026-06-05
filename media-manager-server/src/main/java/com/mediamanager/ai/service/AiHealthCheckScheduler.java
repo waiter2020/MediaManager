@@ -58,7 +58,7 @@ public class AiHealthCheckScheduler implements ApplicationListener<ContextRefres
         }
         try {
             AiProvider provider = aiOrchestrator.resolve(AiTaskType.EMBED_TEXT);
-            var config = aiOrchestrator.defaultConfig();
+            var config = aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT);
             boolean noop = "noop".equalsIgnoreCase(provider.providerId());
             
             long start = System.currentTimeMillis();
@@ -82,12 +82,15 @@ public class AiHealthCheckScheduler implements ApplicationListener<ContextRefres
             } else if (ok) {
                 message = "嵌入服务可用 (延迟 " + latency + "ms)";
             } else {
-                message = "嵌入服务不可用，请确认 Ollama 已启动且已拉取 embed 模型";
+                message = "嵌入服务不可用，请确认向量 Provider 已启动且已配置 embed 模型";
             }
 
             Map<String, Object> snapshot = new LinkedHashMap<>();
             snapshot.put("provider", provider.providerId());
             snapshot.put("displayName", provider.displayName());
+            snapshot.put("embedProvider", provider.providerId());
+            snapshot.put("embedProviderName", provider.displayName());
+            snapshot.put("llmProvider", config.getOrDefault("llmProviderId", config.getOrDefault("providerId", "")));
             snapshot.put("noop", noop);
             snapshot.put("embedModel", config.getOrDefault("embedModel", "nomic-embed-text"));
             snapshot.put("llmModel", config.getOrDefault("llmModel", "qwen2.5:7b"));

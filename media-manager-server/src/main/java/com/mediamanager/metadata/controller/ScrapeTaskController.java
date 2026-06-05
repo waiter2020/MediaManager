@@ -1,14 +1,16 @@
 package com.mediamanager.metadata.controller;
 
 import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.metadata.dto.ScrapeTaskCreateRequest;
+import com.mediamanager.metadata.dto.ScrapeTaskPreviewResponse;
 import com.mediamanager.metadata.dto.ScrapeTaskResponse;
 import com.mediamanager.metadata.service.ScrapeTaskService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * REST API for managing metadata scraping tasks.
@@ -38,26 +40,26 @@ public class ScrapeTaskController {
      */
     @PostMapping("/tasks")
     @PreAuthorize("hasAuthority('library:edit') or hasAuthority('task:execute')")
-    public ApiResponse<ScrapeTaskResponse> createTask(@RequestBody(required = false) Map<String, Object> body) {
-        String targetStatus = "UNIDENTIFIED";
-        Integer libraryId = null;
-        if (body != null) {
-            if (body.get("targetStatus") != null) {
-                targetStatus = String.valueOf(body.get("targetStatus"));
-            }
-            if (body.get("libraryId") != null) {
-                libraryId = Integer.parseInt(String.valueOf(body.get("libraryId")));
-            }
-        }
-        ScrapeTaskResponse task = scrapeTaskService.startScrape(libraryId, "MANUAL", targetStatus);
+    public ApiResponse<ScrapeTaskResponse> createTask(
+            @Valid @RequestBody(required = false) ScrapeTaskCreateRequest body) {
+        ScrapeTaskResponse task = scrapeTaskService.startManualScrape(body);
         return ApiResponse.success(task);
+    }
+
+    @PostMapping("/tasks/preview")
+    @PreAuthorize("hasAuthority('task:view')")
+    public ApiResponse<ScrapeTaskPreviewResponse> previewTask(
+            @Valid @RequestBody(required = false) ScrapeTaskCreateRequest body) {
+        return ApiResponse.success(scrapeTaskService.previewManualScrape(body));
     }
 
     @PostMapping("/start")
     @PreAuthorize("hasAuthority('library:edit') or hasAuthority('task:execute')")
-    public ApiResponse<ScrapeTaskResponse> startScrapeAll(@RequestBody(required = false) Map<String, String> body) {
-        String targetStatus = body != null ? body.getOrDefault("targetStatus", "UNIDENTIFIED") : "UNIDENTIFIED";
-        ScrapeTaskResponse task = scrapeTaskService.startScrape(null, "MANUAL", targetStatus);
+    public ApiResponse<ScrapeTaskResponse> startScrapeAll(
+            @Valid @RequestBody(required = false) ScrapeTaskCreateRequest body) {
+        ScrapeTaskCreateRequest request = body != null ? body : new ScrapeTaskCreateRequest();
+        request.setLibraryId(null);
+        ScrapeTaskResponse task = scrapeTaskService.startManualScrape(request);
         if (task == null) {
             return ApiResponse.success(null);
         }
@@ -75,9 +77,10 @@ public class ScrapeTaskController {
     @PreAuthorize("hasAuthority('library:edit') or hasAuthority('task:execute')")
     public ApiResponse<ScrapeTaskResponse> startScrapeLibrary(
             @PathVariable Integer libraryId,
-            @RequestBody(required = false) Map<String, String> body) {
-        String targetStatus = body != null ? body.getOrDefault("targetStatus", "UNIDENTIFIED") : "UNIDENTIFIED";
-        ScrapeTaskResponse task = scrapeTaskService.startScrape(libraryId, "MANUAL", targetStatus);
+            @Valid @RequestBody(required = false) ScrapeTaskCreateRequest body) {
+        ScrapeTaskCreateRequest request = body != null ? body : new ScrapeTaskCreateRequest();
+        request.setLibraryId(libraryId);
+        ScrapeTaskResponse task = scrapeTaskService.startManualScrape(request);
         if (task == null) {
             return ApiResponse.success(null);
         }

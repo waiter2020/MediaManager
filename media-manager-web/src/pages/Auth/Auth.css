@@ -311,8 +311,16 @@
     padding: 14px;
   }
 
+  .auth-panel {
+    order: -1;
+  }
+
   .auth-showcase {
     padding: 20px;
+  }
+
+  .auth-showcase-main {
+    margin: 24px 0;
   }
 
   .auth-showcase-main h1 {
@@ -324,11 +332,15 @@
   }
 
   .auth-visual {
-    min-height: 150px;
+    display: none;
   }
 
   .auth-poster-large {
     min-height: 150px;
+  }
+
+  .auth-insights {
+    margin-top: 16px;
   }
 
   .auth-insight {

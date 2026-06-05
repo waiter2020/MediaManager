@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Button } from 'antd';
 import { history } from '@umijs/max';
-import MediaCard from '@/components/MediaCard';
+import MediaCard, { type MediaCardPreviewMode } from '@/components/MediaCard';
+import { openPlayerWindow } from '@/utils/playerWindow';
 import type { MediaItem } from '@/types/media';
 import './index.css';
 
@@ -12,6 +13,8 @@ interface HorizontalMediaRowProps {
   viewAllLink?: string;
   loading?: boolean;
   playMode?: 'detail' | 'resume';
+  autoCarousel?: boolean;
+  thumbnailPreviewMode?: MediaCardPreviewMode;
 }
 
 const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
@@ -20,16 +23,25 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   viewAllLink,
   loading = false,
   playMode = 'detail',
+  autoCarousel = false,
+  thumbnailPreviewMode = 'hover',
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const [isPointerInside, setIsPointerInside] = useState(false);
+
+  const openItemPlayer = (item: MediaItem) => {
+    const position = item.playbackPosition && item.playbackPosition > 30 ? item.playbackPosition : 0;
+    if (!openPlayerWindow(item.id, { position })) {
+      history.push(`/player/${item.id}${position > 0 ? `?t=${position}` : ''}`);
+    }
+  };
 
   const navigateItem = (item: MediaItem) => {
     const playable = item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type);
     if (playMode === 'resume' && playable) {
-      const position = item.playbackPosition && item.playbackPosition > 30 ? item.playbackPosition : 0;
-      history.push(`/player/${item.id}${position > 0 ? `?t=${position}` : ''}`);
+      openItemPlayer(item);
       return;
     }
     history.push(`/media/${item.id}`);
@@ -54,6 +66,28 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
     };
   }, [checkScroll, items]);
 
+  useEffect(() => {
+    if (!autoCarousel || loading || items.length <= 1 || isPointerInside) return undefined;
+
+    const interval = window.setInterval(() => {
+      const el = scrollRef.current;
+      if (!el || el.scrollWidth <= el.clientWidth + 8) return;
+
+      const firstItem = el.querySelector<HTMLElement>('.row-scroll-item');
+      const styles = window.getComputedStyle(el);
+      const gap = Number.parseFloat(styles.columnGap || styles.gap || '16') || 16;
+      const step = firstItem ? firstItem.offsetWidth + gap : el.clientWidth * 0.75;
+      const nearEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - step - 8;
+
+      el.scrollTo({
+        left: nearEnd ? 0 : el.scrollLeft + step,
+        behavior: 'smooth',
+      });
+    }, 4200);
+
+    return () => window.clearInterval(interval);
+  }, [autoCarousel, isPointerInside, items.length, loading]);
+
   const scroll = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
     if (!el) return;
@@ -72,7 +106,7 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
         </div>
         <div style={{ display: 'flex', gap: 16 }}>
           {Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="skeleton-card" style={{ flex: '0 0 170px' }}>
+          <div key={i} className="skeleton-card" style={{ flex: '0 0 var(--row-item-width, 170px)' }}>
               <div className="skeleton-poster" />
               <div className="skeleton-text">
                 <div className="skeleton-line" />
@@ -99,7 +133,11 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
           </div>
         )}
       </div>
-      <div className="row-scroll-container">
+      <div
+        className="row-scroll-container"
+        onMouseEnter={() => setIsPointerInside(true)}
+        onMouseLeave={() => setIsPointerInside(false)}
+      >
         {canScrollLeft && (
           <button className="scroll-btn scroll-left" onClick={() => scroll('left')}>
             <LeftOutlined />
@@ -117,7 +155,16 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
                 rating={item.rating}
                 releaseDate={item.releaseDate}
                 overview={item.overview}
+                libraryName={item.libraryName}
+                tags={item.tags}
+                categories={item.categories}
+                playbackPercent={item.playbackPercent}
+                watched={item.watched}
+                favorited={item.favorited}
+                watchlisted={item.watchlisted}
+                previewMode={thumbnailPreviewMode}
                 onClick={() => navigateItem(item)}
+                onPlay={item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type) ? () => openItemPlayer(item) : undefined}
               />
             </div>
           ))}

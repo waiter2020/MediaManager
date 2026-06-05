@@ -10,9 +10,18 @@ export interface VideoPlayerProps {
   mode: 'direct' | 'hls';
   poster?: string;
   autoplay?: boolean;
+  fill?: boolean;
+  subtitles?: VideoSubtitleTrack[];
   startTime?: number;
   onProgress?: (seconds: number) => void;
   onError?: (message: string) => void;
+}
+
+export interface VideoSubtitleTrack {
+  src: string;
+  label?: string;
+  language?: string;
+  defaultTrack?: boolean;
 }
 
 type PlayerWithControls = Player & {
@@ -42,6 +51,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   mode,
   poster,
   autoplay = true,
+  fill = false,
+  subtitles = [],
   startTime = 0,
   onProgress,
   onError,
@@ -75,12 +86,38 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       url: resolvePlaybackUrl(src),
       poster,
       autoplay,
-      fluid: true,
+      fluid: !fill,
+      width: '100%',
+      height: fill ? '100%' : undefined,
       lang: 'zh-cn',
       plugins: mode === 'hls' ? [HlsPlugin] : [],
       hls: mode === 'hls' ? { retryCount: 3 } : undefined,
     });
     playerRef.current = player;
+
+    const attachSubtitles = () => {
+      const video = containerRef.current?.querySelector('video');
+      if (!video) return;
+      video.querySelectorAll('track[data-mediamanager-subtitle="true"]').forEach((track) => track.remove());
+      subtitles.forEach((subtitle, index) => {
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.src = resolvePlaybackUrl(subtitle.src);
+        track.label = subtitle.label || subtitle.language || `Subtitle ${index + 1}`;
+        track.srclang = subtitle.language || 'und';
+        track.default = subtitle.defaultTrack || index === 0;
+        track.dataset.mediamanagerSubtitle = 'true';
+        video.appendChild(track);
+      });
+      const textTracks = video.textTracks;
+      if (textTracks && textTracks.length > 0) {
+        for (let i = 0; i < textTracks.length; i += 1) {
+          textTracks[i].mode = subtitles[i]?.defaultTrack || i === 0 ? 'showing' : 'disabled';
+        }
+      }
+    };
+    attachSubtitles();
+    player.once('loadedmetadata', attachSubtitles);
 
     if (startTime > 0) {
       player.once('loadedmetadata', () => {
@@ -103,7 +140,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const onPlayError = () => {
       const hint =
         mode === 'hls'
-          ? 'HLS 播放失败：请确认 FFmpeg 可用，且媒体文件路径在容器内可访问。'
+          ? 'HLS 播放失败：请确认 FFmpeg 可用，媒体文件路径可访问，且当前编码/质量档位可用。'
           : '播放失败：请确认文件存在，并且当前账号拥有播放权限。';
       onError?.(hint);
     };
@@ -142,9 +179,18 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       playerRef.current?.destroy();
       playerRef.current = null;
     };
-  }, [src, mode, poster, autoplay, startTime, onProgress, onError]);
+  }, [src, mode, poster, autoplay, fill, subtitles, startTime, onProgress, onError]);
 
-  return <div ref={containerRef} style={{ width: '100%', minHeight: 360 }} />;
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        width: '100%',
+        height: fill ? '100%' : undefined,
+        minHeight: fill ? 0 : 360,
+      }}
+    />
+  );
 };
 
 export default VideoPlayer;

@@ -137,10 +137,19 @@ const Dashboard: React.FC = () => {
             viewAllLink="/discover"
             playMode="resume"
             loading={loading}
+            autoCarousel
+            thumbnailPreviewMode="always"
           />
         )}
         <div className="recent-section">
-          <HorizontalMediaRow title="最近添加" items={recentItems} viewAllLink="/browse" loading={loading} />
+          <HorizontalMediaRow
+            title="最近添加"
+            items={recentItems}
+            viewAllLink="/browse"
+            loading={loading}
+            autoCarousel
+            thumbnailPreviewMode="always"
+          />
         </div>
 
         {!loading && recentItems.length === 0 && continueWatching.length === 0 && (

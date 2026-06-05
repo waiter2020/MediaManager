@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
+import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
-import com.mediamanager.media.service.ThumbnailService;
 import com.mediamanager.metadata.entity.MovieMetadata;
 import com.mediamanager.metadata.entity.AudioMetadata;
 import com.mediamanager.metadata.entity.Episode;
@@ -31,17 +31,36 @@ import java.util.Map;
 public class MetadataApplyService {
 
     private final MediaItemRepository mediaItemRepository;
+    private final MediaFileRepository mediaFileRepository;
     private final MovieMetadataRepository movieMetadataRepository;
     private final TvShowMetadataRepository tvShowMetadataRepository;
     private final SeasonRepository seasonRepository;
     private final ImageMetadataRepository imageMetadataRepository;
     private final AudioMetadataRepository audioMetadataRepository;
-    private final ThumbnailService thumbnailService;
     private final ObjectMapper objectMapper;
     private final NfoExportService nfoExportService;
 
     @Transactional
+    public void applyResult(Integer itemId, MetadataResult result, Integer primaryFileId) {
+        if (itemId == null) {
+            return;
+        }
+        MediaItem item = mediaItemRepository.findById(itemId).orElse(null);
+        if (item == null) {
+            return;
+        }
+        MediaFile primaryFile = primaryFileId != null
+                ? mediaFileRepository.findById(primaryFileId).orElse(null)
+                : null;
+        applyResultToItem(item, result, primaryFile);
+    }
+
+    @Transactional
     public void applyResult(MediaItem item, MetadataResult result, MediaFile primaryFile) {
+        applyResultToItem(item, result, primaryFile);
+    }
+
+    private void applyResultToItem(MediaItem item, MetadataResult result, MediaFile primaryFile) {
         if (result == null) {
             return;
         }
@@ -70,25 +89,16 @@ public class MetadataApplyService {
             item.setProviderIds(toJson(result.getProviderIds()));
         }
 
-        if (item.getPosterPath() == null
-                && ("MOVIE".equals(item.getType()) || "TV_SHOW".equals(item.getType()))
-                && primaryFile != null) {
-            String thumbnailPath = thumbnailService.generateThumbnail(item.getId(), primaryFile.getFilePath());
-            if (thumbnailPath != null) {
-                item.setPosterPath(thumbnailPath);
-            }
-        }
-
         boolean hasMetadata = result.getTitle() != null || result.getOverview() != null || result.getPosterPath() != null;
         if (hasMetadata) {
             item.setStatus("IDENTIFIED");
         }
         item.setLastScannedAt(Instant.now());
-        mediaItemRepository.save(item);
-        persistSpecificMetadata(item, result, primaryFile);
+        MediaItem saved = mediaItemRepository.save(item);
+        persistSpecificMetadata(saved, result, primaryFile);
 
         // Export NFO automatically after metadata is applied
-        nfoExportService.export(item);
+        nfoExportService.export(saved);
     }
 
     private void persistSpecificMetadata(MediaItem item, MetadataResult result, MediaFile primaryFile) {

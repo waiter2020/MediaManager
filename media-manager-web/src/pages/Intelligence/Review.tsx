@@ -931,6 +931,37 @@ const IntelligenceReview: React.FC = () => {
           color: #c084fc !important;
           font-weight: 500;
         }
+        @media (max-width: 640px) {
+          .floating-action-bar {
+            right: 12px;
+            bottom: 12px;
+            left: 12px;
+            transform: none;
+            border-radius: 14px;
+            padding: 12px;
+          }
+          .floating-action-bar .ant-space {
+            width: 100%;
+            justify-content: stretch;
+          }
+          .floating-action-bar .ant-btn {
+            flex: 1 1 130px;
+          }
+          .diff-drawer .ant-drawer-body {
+            padding: 16px !important;
+          }
+          .diff-header {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 8px;
+          }
+          .diff-body {
+            padding: 12px;
+          }
+          .diff-col {
+            font-size: 12px;
+          }
+        }
       `}</style>
 
       {/* 1. AUTO REVIEW CONFIGURATION PANEL */}

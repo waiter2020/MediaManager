@@ -3,7 +3,6 @@ package com.mediamanager.classification.service;
 import com.mediamanager.classification.dto.CategoryResponse;
 import com.mediamanager.classification.dto.TagResponse;
 import com.mediamanager.classification.entity.Category;
-import com.mediamanager.classification.entity.Tag;
 import com.mediamanager.classification.repository.CategoryRepository;
 import com.mediamanager.classification.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +21,7 @@ public class ClassificationService {
 
     @Transactional(readOnly = true)
     public List<TagResponse> getAllTags() {
-        return tagRepository.findAll().stream()
+        return tagRepository.findGlobalUsageCounts().stream()
                 .map(this::toTagResponse)
                 .collect(Collectors.toList());
     }
@@ -54,12 +53,14 @@ public class ClassificationService {
                 .build();
     }
 
-    private TagResponse toTagResponse(Tag tag) {
+    private TagResponse toTagResponse(TagRepository.TagUsageProjection row) {
         return TagResponse.builder()
-                .id(tag.getId())
-                .name(tag.getName())
-                .color(tag.getColor())
-                .source(tag.getSource())
+                .id(row.getTagId())
+                .name(row.getTagName())
+                .color(row.getColor())
+                .source(row.getSource())
+                .usageCount(row.getUsageCount() != null ? row.getUsageCount() : 0L)
+                .createdAt(row.getCreatedAt())
                 .build();
     }
 }

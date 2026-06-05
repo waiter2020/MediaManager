@@ -20,7 +20,8 @@ const AiSettings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<AiProviderDescriptor[]>([]);
   const [config, setConfig] = useState<AiConfigPayload | null>(null);
-  const [providerId, setProviderId] = useState('ollama');
+  const [llmProviderId, setLlmProviderId] = useState('ollama');
+  const [embedProviderId, setEmbedProviderId] = useState('ollama');
   const [aiHealth, setAiHealth] = useState<AiHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [reindexing, setReindexing] = useState(false);
@@ -33,7 +34,8 @@ const AiSettings: React.FC = () => {
       if (providerRes.code === 200) setProviders(providerRes.data || []);
       if (configRes.code === 200 && configRes.data) {
         setConfig(configRes.data);
-        setProviderId(configRes.data.defaultProvider || 'ollama');
+        setLlmProviderId(configRes.data.llmProvider || configRes.data.defaultProvider || 'ollama');
+        setEmbedProviderId(configRes.data.embedProvider || configRes.data.defaultProvider || 'ollama');
       }
     } finally {
       setLoading(false);
@@ -67,7 +69,9 @@ const AiSettings: React.FC = () => {
     [providers],
   );
 
-  const selectedProvider = providers.find((provider) => provider.id === providerId);
+  const llmUsesOpenAi = llmProviderId === 'openai-compatible';
+  const embedUsesOpenAi = embedProviderId === 'openai-compatible';
+  const usesOllama = llmProviderId === 'ollama' || embedProviderId === 'ollama';
 
   if (!access.canManageSystem) {
     return (
@@ -80,12 +84,12 @@ const AiSettings: React.FC = () => {
   return (
     <PageContainer
       title="AI 提供方设置"
-      subTitle="选择全局默认 Provider，并配置 Ollama 或 OpenAI 兼容端点。库级配置可在媒体库插件配置中覆盖。"
+      subTitle="分别选择 LLM 与向量 Provider，并配置 Ollama 或 OpenAI 兼容端点。库级配置可在媒体库插件配置中覆盖。"
     >
       <Card loading={loading} style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            保存后会自动执行健康检查。语义搜索依赖 Embedding 模型，自然语言查询与 AI 打标依赖 LLM。
+            保存后会自动执行健康检查。语义搜索依赖向量 Provider，自然语言查询与 AI 打标依赖 LLM Provider。
           </Typography.Paragraph>
           <Space>
             <Button loading={healthLoading} onClick={() => runHealth(true)}>
@@ -130,8 +134,9 @@ const AiSettings: React.FC = () => {
                     {aiHealth.status === 'ok' ? '正常' : '降级'}
                   </Tag>
                   <Typography.Text style={{ marginLeft: 8 }}>
-                    {String(aiHealth.displayName || aiHealth.provider || '-')} / {String(aiHealth.embedModel || '-')} /{' '}
-                    {String(aiHealth.llmModel || '-')} / 维度{' '}
+                    向量 {String(aiHealth.embedProviderName || aiHealth.displayName || aiHealth.embedProvider || aiHealth.provider || '-')} /{' '}
+                    {String(aiHealth.embedModel || '-')}，LLM {String(aiHealth.llmProviderName || aiHealth.llmProvider || '-')} /{' '}
+                    {String(aiHealth.llmModel || '-')}，维度{' '}
                     {formatEmbeddingDimensions(aiHealth.embeddingDimensions)}
                   </Typography.Text>
                   {aiHealth.message && (
@@ -149,9 +154,14 @@ const AiSettings: React.FC = () => {
       <Card loading={loading}>
         {config && (
           <ProForm<AiConfigPayload>
-            initialValues={config}
+            initialValues={{
+              ...config,
+              llmProvider: config.llmProvider || config.defaultProvider || 'ollama',
+              embedProvider: config.embedProvider || config.defaultProvider || 'ollama',
+            }}
             onValuesChange={(_, all) => {
-              if (all.defaultProvider) setProviderId(all.defaultProvider);
+              if (all.llmProvider) setLlmProviderId(all.llmProvider);
+              if (all.embedProvider) setEmbedProviderId(all.embedProvider);
             }}
             submitter={{
               searchConfig: { submitText: '保存 AI 配置' },
@@ -160,10 +170,17 @@ const AiSettings: React.FC = () => {
             onFinish={async (values) => {
               setSaving(true);
               try {
-                const res = await updateAiConfig(values);
+                const payload: AiConfigPayload = {
+                  ...config,
+                  ...values,
+                  defaultProvider: values.llmProvider || values.defaultProvider || config.defaultProvider,
+                };
+                const res = await updateAiConfig(payload);
                 if (res.code === 200) {
                   message.success('AI 配置已保存');
                   setConfig(res.data);
+                  setLlmProviderId(res.data.llmProvider || res.data.defaultProvider || 'ollama');
+                  setEmbedProviderId(res.data.embedProvider || res.data.defaultProvider || 'ollama');
                   await runHealth(true);
                 }
               } finally {
@@ -172,44 +189,71 @@ const AiSettings: React.FC = () => {
             }}
           >
             <ProFormSelect
-              name="defaultProvider"
-              label="默认 AI 提供方"
+              name="llmProvider"
+              label="LLM 提供方"
               options={providerOptions}
               rules={[{ required: true }]}
-              extra="所有未单独配置 AI 的媒体库将使用此提供方"
+              extra="自然语言查询、元数据补全和 AI 打标会使用此提供方"
             />
+            <ProFormText name="llmModel" label="LLM 模型" rules={[{ required: true }]} />
 
-            <Divider orientation="left">
-              {providerId === 'openai-compatible' ? 'OpenAI 兼容 API' : 'Ollama 本地'}
-            </Divider>
+            <ProFormSelect
+              name="embedProvider"
+              label="向量提供方"
+              options={providerOptions}
+              rules={[{ required: true }]}
+              extra="语义搜索、相似推荐和向量索引会使用此提供方"
+            />
+            <ProFormText name="embedModel" label="Embedding 模型" rules={[{ required: true }]} />
 
-            {providerId === 'openai-compatible' ? (
+            {llmUsesOpenAi && (
               <>
+                <Divider orientation="left">LLM OpenAI 兼容 API</Divider>
                 <ProFormText
-                  name="openaiBaseUrl"
-                  label="API Base URL"
+                  name="openaiLlmBaseUrl"
+                  label="LLM API Base URL"
                   placeholder="https://api.openai.com/v1"
                   rules={[{ required: true }]}
                 />
                 <ProFormText.Password
-                  name="openaiApiKey"
-                  label="API Key"
+                  name="openaiLlmApiKey"
+                  label="LLM API Key"
                   placeholder="留空则不修改已保存的 Key"
-                  extra={config.openaiApiKey === '***' ? '已配置 Key，输入新值可覆盖' : undefined}
+                  extra={config.openaiLlmApiKey === '***' ? '已配置 LLM Key，输入新值可覆盖' : undefined}
                 />
               </>
-            ) : (
-              <ProFormText
-                name="ollamaBaseUrl"
-                label="Ollama 服务地址"
-                placeholder="http://host.docker.internal:11434"
-                rules={[{ required: true }]}
-                extra="Docker 容器内不要使用 localhost；留空则使用环境变量 MEDIAMANAGER_AI_OLLAMA_BASE_URL"
-              />
             )}
 
-            <ProFormText name="llmModel" label="LLM 模型" rules={[{ required: true }]} />
-            <ProFormText name="embedModel" label="Embedding 模型" rules={[{ required: true }]} />
+            {embedUsesOpenAi && (
+              <>
+                <Divider orientation="left">向量 OpenAI 兼容 API</Divider>
+                <ProFormText
+                  name="openaiEmbedBaseUrl"
+                  label="Embedding API Base URL"
+                  placeholder="https://api.openai.com/v1"
+                  rules={[{ required: true }]}
+                />
+                <ProFormText.Password
+                  name="openaiEmbedApiKey"
+                  label="Embedding API Key"
+                  placeholder="留空则不修改已保存的 Key"
+                  extra={config.openaiEmbedApiKey === '***' ? '已配置向量 Key，输入新值可覆盖' : undefined}
+                />
+              </>
+            )}
+
+            {usesOllama && (
+              <>
+                <Divider orientation="left">Ollama 本地</Divider>
+                <ProFormText
+                  name="ollamaBaseUrl"
+                  label="Ollama 服务地址"
+                  placeholder="http://host.docker.internal:11434"
+                  rules={[{ required: true }]}
+                  extra="Docker 容器内不要使用 localhost；留空则使用环境变量 MEDIAMANAGER_AI_OLLAMA_BASE_URL"
+                />
+              </>
+            )}
 
             <Divider orientation="left">行为</Divider>
 
@@ -222,17 +266,17 @@ const AiSettings: React.FC = () => {
               name="outboundAllowed"
               label="允许云端 Provider"
               fieldProps={{ checkedChildren: '允许', unCheckedChildren: '仅本地' }}
-              extra="关闭后即使选择 openai-compatible 也会回退到 Ollama"
+              extra="关闭后，选择 openai-compatible 的任务会降级为 noop"
             />
             <ProFormDigit
               name="timeoutMs"
               label="请求超时（毫秒）"
               min={5000}
-              max={300000}
+              max={600000}
               fieldProps={{ style: { width: 200 } }}
             />
 
-            {selectedProvider?.configSchema?.fields && (
+            {providers.length > 0 && (
               <Alert
                 type="info"
                 showIcon
@@ -241,7 +285,7 @@ const AiSettings: React.FC = () => {
                 description={
                   <>
                     在“媒体库 / 插件配置”中添加类型为 <Tag>AI_PROVIDER</Tag> 的插件，例如{' '}
-                    <code>{selectedProvider.id}</code>，可为本库单独指定地址与模型。
+                    <code>{llmProviderId}</code> 或 <code>{embedProviderId}</code>，可为本库单独指定地址与模型。
                   </>
                 }
               />

@@ -5,6 +5,7 @@ import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.repository.MediaItemSpecification;
+import com.mediamanager.media.repository.UserPlaybackHistoryRepository;
 import com.mediamanager.ai.service.EmbeddingIndexService;
 import com.mediamanager.media.service.MediaItemService;
 import com.mediamanager.media.service.UserActivityService;
@@ -38,6 +39,7 @@ public class DiscoverService {
     private final LibraryAccessService libraryAccessService;
     private final SecurityCurrentUser securityCurrentUser;
     private final EmbeddingIndexService embeddingIndexService;
+    private final UserPlaybackHistoryRepository playbackHistoryRepository;
 
     @Transactional(readOnly = true)
     public DiscoverResponse discover(int limit) {
@@ -46,8 +48,12 @@ public class DiscoverService {
         Set<Integer> libraryIds = libraryAccessService.getViewableLibraryIds(user);
 
         List<MediaItemResponse> continueWatching = List.of();
+        List<MediaItemResponse> watchlist = List.of();
+        List<MediaItemResponse> favorites = List.of();
         if (user.isPresent()) {
-            continueWatching = userActivityService.getRecentPlayed(user.get().getId(), cap);
+            continueWatching = userActivityService.getContinueWatching(user.get().getId(), cap);
+            watchlist = userActivityService.getWatchlist(user.get().getId(), cap);
+            favorites = userActivityService.getRecentFavorites(user.get().getId(), cap);
         }
 
         Specification<MediaItem> visibleSpec = MediaItemSpecification.filterBy(libraryIds, null, null, null, null);
@@ -59,12 +65,47 @@ public class DiscoverService {
                 .collect(Collectors.toList());
 
         List<MediaItemResponse> recommended = buildRecommended(libraryIds, continueWatching, recentlyAdded, cap);
+        List<MediaItemResponse> topRated = buildTopRated(libraryIds, cap);
+        List<MediaItemResponse> unwatched = buildUnwatched(libraryIds, user.map(SysUser::getId), cap);
 
         return DiscoverResponse.builder()
                 .continueWatching(continueWatching)
+                .watchlist(watchlist)
                 .recommended(recommended)
+                .favorites(favorites)
+                .topRated(topRated)
+                .unwatched(unwatched)
                 .recentlyAdded(recentlyAdded)
                 .build();
+    }
+
+    private List<MediaItemResponse> buildTopRated(Set<Integer> libraryIds, int cap) {
+        Specification<MediaItem> spec = MediaItemSpecification.filterBy(libraryIds, null, null, null, null);
+        return itemRepository.findAll(
+                        spec,
+                        PageRequest.of(0, cap, Sort.by(Sort.Direction.DESC, "rating")))
+                .getContent()
+                .stream()
+                .filter(item -> item.getRating() != null)
+                .map(mediaItemService::toResponsePublic)
+                .collect(Collectors.toList());
+    }
+
+    private List<MediaItemResponse> buildUnwatched(Set<Integer> libraryIds, Optional<Integer> userId, int cap) {
+        if (userId.isEmpty()) {
+            return List.of();
+        }
+        Set<Integer> watchedIds = new LinkedHashSet<>(playbackHistoryRepository.findCompletedMediaItemIdsByUserId(userId.get()));
+        Specification<MediaItem> spec = MediaItemSpecification.filterBy(libraryIds, null, null, null, null);
+        return itemRepository.findAll(
+                        spec,
+                        PageRequest.of(0, cap * 4, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .getContent()
+                .stream()
+                .filter(item -> !watchedIds.contains(item.getId()))
+                .limit(cap)
+                .map(mediaItemService::toResponsePublic)
+                .collect(Collectors.toList());
     }
 
     private List<MediaItemResponse> buildRecommended(

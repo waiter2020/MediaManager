@@ -35,4 +35,19 @@ public class UserPlaybackHistory {
     @Builder.Default
     @Column(name = "position")
     private Integer position = 0;
+
+    @Column(name = "duration_seconds")
+    private Integer durationSeconds;
+
+    @Builder.Default
+    @Column(name = "completed", nullable = false)
+    private Boolean completed = false;
+
+    @Convert(converter = InstantMillisAttributeConverter.class)
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
+    @Builder.Default
+    @Column(name = "play_count", nullable = false)
+    private Integer playCount = 1;
 }

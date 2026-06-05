@@ -71,6 +71,11 @@ body,
   background: var(--mm-bg);
 }
 
+html {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
   background:
@@ -80,6 +85,13 @@ body {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+img,
+video,
+canvas {
+  max-width: 100%;
 }
 
 ::-webkit-scrollbar {
@@ -231,6 +243,25 @@ body {
   min-width: 0;
 }
 
+.ant-layout-content,
+.ant-pro-page-container,
+.ant-pro-page-container-children-content {
+  min-width: 0;
+}
+
+.ant-page-header-heading,
+.ant-page-header-heading-left,
+.ant-page-header-heading-title,
+.ant-page-header-heading-sub-title,
+.ant-page-header-heading-extra {
+  min-width: 0;
+}
+
+.ant-page-header-heading-title,
+.ant-pro-page-container .ant-page-header-heading-title {
+  overflow-wrap: anywhere;
+}
+
 .ant-btn,
 .ant-input,
 .ant-input-affix-wrapper,
@@ -249,6 +280,13 @@ body {
 .ant-btn {
   font-weight: 500;
   letter-spacing: 0;
+  min-width: 0;
+}
+
+.ant-btn > span:not(.anticon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ant-btn-primary {
@@ -282,6 +320,7 @@ body {
 
 .ant-table-wrapper {
   border-radius: var(--mm-radius);
+  max-width: 100%;
 }
 
 .ant-table-wrapper .ant-table {
@@ -320,6 +359,10 @@ body {
 
 .ant-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
   color: var(--mm-primary-hover) !important;
+}
+
+.ant-tabs-nav-list {
+  min-width: 0;
 }
 
 .ant-segmented {
@@ -378,6 +421,23 @@ body {
   margin-bottom: 0;
 }
 
+.directory-input-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.directory-input-row .ant-input {
+  min-width: 0;
+}
+
+.library-form-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+}
+
 @keyframes fadeSlideUp {
   from {
     opacity: 0;
@@ -416,6 +476,24 @@ body {
     padding-block-start: 12px;
   }
 
+  .ant-pro-page-container .ant-page-header,
+  .ant-page-header {
+    padding: 12px 14px 4px;
+  }
+
+  .ant-page-header-heading {
+    gap: 10px;
+  }
+
+  .ant-page-header-heading-extra {
+    width: 100%;
+    margin-inline-start: 0;
+  }
+
+  .ant-page-header-heading-extra .ant-space {
+    width: 100%;
+  }
+
   .ant-page-header-heading-title,
   .ant-pro-page-container .ant-page-header-heading-title {
     font-size: 21px;
@@ -424,6 +502,224 @@ body {
   .media-grid {
     grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
     gap: 12px;
+  }
+
+  .ant-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ant-table-wrapper .ant-table {
+    min-width: 640px;
+  }
+
+  .ant-table-wrapper .ant-table-content,
+  .ant-table-wrapper .ant-table-container {
+    overflow-x: auto !important;
+  }
+
+  .ant-table-wrapper .ant-table-cell {
+    white-space: nowrap;
+  }
+
+  .ant-table-wrapper .ant-table-cell .ant-typography,
+  .ant-table-wrapper .ant-table-cell p {
+    white-space: normal;
+  }
+
+  .ant-pro-table .ant-pro-table-search {
+    margin-bottom: 12px;
+  }
+
+  .ant-pro-table .ant-pro-table-list-toolbar-container {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ant-pro-table .ant-pro-table-list-toolbar-left,
+  .ant-pro-table .ant-pro-table-list-toolbar-right,
+  .ant-pro-table .ant-pro-table-list-toolbar-setting-items {
+    width: 100%;
+  }
+
+  .ant-pro-table .ant-pro-table-list-toolbar-right .ant-space {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .ant-form-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+  }
+
+  .ant-form-inline .ant-form-item {
+    margin: 0;
+  }
+
+  .ant-card-head-wrapper {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .ant-card-extra {
+    min-width: 0;
+  }
+
+  .ant-card-extra .ant-space {
+    max-width: 100%;
+  }
+
+  .ant-drawer-content-wrapper {
+    max-width: 100vw !important;
+  }
+
+  .ant-drawer-body {
+    padding: 16px !important;
+  }
+
+  .ant-modal {
+    max-width: calc(100vw - 24px);
+    margin: 8px auto;
+  }
+
+  .ant-modal-content {
+    max-height: calc(100vh - 16px);
+    overflow: hidden;
+  }
+
+  .ant-modal-body {
+    max-height: calc(100vh - 190px);
+    overflow: auto;
+  }
+
+  .ant-modal-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .ant-modal-footer .ant-btn {
+    margin-inline-start: 0 !important;
+  }
+
+  .ant-pagination {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 8px;
+  }
+
+  .ant-steps {
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .ant-steps .ant-steps-item {
+    min-width: 128px;
+  }
+
+  .directory-input-row {
+    flex-direction: column;
+  }
+
+  .directory-input-row .ant-btn {
+    width: 100%;
+  }
+
+  .library-form-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .library-form-actions > .ant-space,
+  .library-form-actions .ant-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .ant-space:not(.ant-space-vertical) {
+    flex-wrap: wrap;
+  }
+
+  .ant-page-header-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ant-page-header-heading-left {
+    flex-wrap: wrap;
+  }
+
+  .ant-page-header-heading-extra .ant-space-item,
+  .ant-card-extra .ant-space-item {
+    min-width: 0;
+  }
+
+  .ant-page-header-heading-extra .ant-btn,
+  .ant-card-extra .ant-btn {
+    max-width: 100%;
+  }
+
+  .ant-card-head {
+    padding-inline: 14px !important;
+  }
+
+  .ant-card-body {
+    padding: 14px;
+  }
+
+  .ant-card-body[style*='padding: 0'] {
+    padding: 0 !important;
+  }
+
+  .ant-form-inline .ant-form-item,
+  .ant-form-inline .ant-form-item-control,
+  .ant-form-inline .ant-select,
+  .ant-form-inline .ant-input-number,
+  .ant-form-inline .ant-picker {
+    width: 100% !important;
+  }
+
+  .ant-drawer-content-wrapper {
+    width: 100vw !important;
+  }
+
+  .ant-drawer-header,
+  .ant-drawer-footer {
+    padding-inline: 16px !important;
+  }
+
+  .ant-modal-footer .ant-btn {
+    flex: 1 1 120px;
+  }
+
+  .ant-pagination-options {
+    display: none !important;
+  }
+
+  .ant-input-search,
+  .ant-card-extra .ant-select,
+  .ant-card-extra .ant-input-search {
+    width: 100% !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .ant-pro-page-container-children-container {
+    padding-inline: 10px;
+  }
+
+  .media-grid {
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 10px;
+  }
+
+  .ant-table-wrapper .ant-table {
+    min-width: 560px;
   }
 }
 

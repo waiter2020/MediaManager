@@ -52,7 +52,8 @@ class AiHealthCheckSchedulerTest {
         config.put("embedModel", "nomic-embed-text");
         config.put("llmModel", "qwen2.5:7b");
         config.put("baseUrl", "");
-        when(aiOrchestrator.defaultConfig()).thenReturn(config);
+        config.put("llmProviderId", "noop");
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT)).thenReturn(config);
         when(aiOrchestrator.isClassifierEnabled()).thenReturn(false);
 
         scheduler.refreshHealthCache();
@@ -78,7 +79,8 @@ class AiHealthCheckSchedulerTest {
         config.put("embedModel", "nomic-embed-text");
         config.put("llmModel", "qwen2.5:7b");
         config.put("baseUrl", "http://localhost:11434");
-        when(aiOrchestrator.defaultConfig()).thenReturn(config);
+        config.put("llmProviderId", "ollama");
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT)).thenReturn(config);
         when(aiOrchestrator.isClassifierEnabled()).thenReturn(true);
         
         // Mock successful embedding check
@@ -108,7 +110,8 @@ class AiHealthCheckSchedulerTest {
         config.put("embedModel", "nomic-embed-text");
         config.put("llmModel", "qwen2.5:7b");
         config.put("baseUrl", "http://localhost:11434");
-        when(aiOrchestrator.defaultConfig()).thenReturn(config);
+        config.put("llmProviderId", "ollama");
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT)).thenReturn(config);
         when(aiOrchestrator.isClassifierEnabled()).thenReturn(true);
         
         // Mock failing embedding check
@@ -130,7 +133,7 @@ class AiHealthCheckSchedulerTest {
         when(aiOrchestrator.resolve(AiTaskType.EMBED_TEXT)).thenReturn(aiProvider);
         when(aiProvider.providerId()).thenReturn("noop");
         when(aiProvider.displayName()).thenReturn("No-op");
-        when(aiOrchestrator.defaultConfig()).thenReturn(new HashMap<>());
+        when(aiOrchestrator.defaultConfig(AiTaskType.EMBED_TEXT)).thenReturn(new HashMap<>());
         
         ContextRefreshedEvent event = mock(ContextRefreshedEvent.class);
         scheduler.onApplicationEvent(event);

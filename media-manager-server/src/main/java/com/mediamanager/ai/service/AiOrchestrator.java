@@ -56,6 +56,12 @@ public class AiOrchestrator {
     @Value("${mediamanager.ai.default-provider:ollama}")
     private String yamlDefaultProviderId;
 
+    @Value("${mediamanager.ai.llm-provider:${mediamanager.ai.default-provider:ollama}}")
+    private String yamlLlmProviderId;
+
+    @Value("${mediamanager.ai.embed-provider:${mediamanager.ai.default-provider:ollama}}")
+    private String yamlEmbedProviderId;
+
     @Value("${mediamanager.ai.ollama.base-url:http://localhost:11434}")
     private String yamlOllamaBaseUrl;
 
@@ -64,13 +70,14 @@ public class AiOrchestrator {
     }
 
     public AiProvider resolve(Integer libraryId, AiTaskType taskType) {
-        Map<String, Object> cfg = buildConfig(libraryId);
+        Map<String, Object> cfg = buildConfig(libraryId, taskType);
         String providerId = str(cfg, "providerId", yamlDefaultProviderId);
         boolean outboundAllowed = bool(cfg, "outboundAllowed", true);
         if (!outboundAllowed && "openai-compatible".equalsIgnoreCase(providerId)) {
             log.warn(
-                    "AI provider openai-compatible is configured but ai.outbound_allowed=false; "
-                            + "refusing silent fallback to Ollama");
+                    "AI provider openai-compatible is configured for {} but ai.outbound_allowed=false; "
+                            + "refusing cloud provider",
+                    taskType);
             return noopFor(taskType);
         }
         final String selectedId = providerId;
@@ -99,29 +106,38 @@ public class AiOrchestrator {
     }
 
     public Map<String, Object> defaultConfig() {
-        return defaultConfig(null);
+        return buildConfig(null, null);
     }
 
     public Map<String, Object> defaultConfig(Integer libraryId) {
-        return buildConfig(libraryId);
+        return buildConfig(libraryId, null);
     }
 
-    private Map<String, Object> buildConfig(Integer libraryId) {
+    public Map<String, Object> defaultConfig(AiTaskType taskType) {
+        return defaultConfig(null, taskType);
+    }
+
+    public Map<String, Object> defaultConfig(Integer libraryId, AiTaskType taskType) {
+        return buildConfig(libraryId, taskType);
+    }
+
+    private Map<String, Object> buildConfig(Integer libraryId, AiTaskType taskType) {
         Map<String, Object> cfg = new HashMap<>(sysConfigService.aiConfigOverrides());
         if (libraryId != null) {
             mergeLibraryAiConfig(libraryId, cfg);
         }
-        String providerId = str(cfg, "providerId", yamlDefaultProviderId);
-        if (!cfg.containsKey("providerId") || providerId.isBlank()) {
-            cfg.put("providerId", yamlDefaultProviderId);
-            providerId = yamlDefaultProviderId;
-        }
-        if (!cfg.containsKey("baseUrl") || str(cfg, "baseUrl", "").isBlank()) {
-            if ("openai-compatible".equalsIgnoreCase(providerId)) {
-                log.warn("openai-compatible selected but ai.openai.base_url is empty");
-            } else {
-                cfg.put("baseUrl", yamlOllamaBaseUrl);
-            }
+        String defaultProviderId = firstNonBlank(str(cfg, "providerId", null), yamlDefaultProviderId);
+        String llmProviderId = firstNonBlank(str(cfg, "llmProviderId", null), yamlLlmProviderId, defaultProviderId);
+        String embedProviderId = firstNonBlank(str(cfg, "embedProviderId", null), yamlEmbedProviderId, defaultProviderId);
+        String selectedProviderId = providerIdForTask(taskType, defaultProviderId, llmProviderId, embedProviderId);
+        cfg.put("defaultProviderId", defaultProviderId);
+        cfg.put("llmProviderId", llmProviderId);
+        cfg.put("embedProviderId", embedProviderId);
+        cfg.put("providerId", selectedProviderId);
+        cfg.put("baseUrl", baseUrlFor(selectedProviderId, taskType, cfg));
+        String apiKey = apiKeyFor(selectedProviderId, taskType, cfg);
+        if (!apiKey.isBlank() || cfg.containsKey("apiKey")) {
+            cfg.put("apiKey", apiKey);
         }
         if (!cfg.containsKey("llmModel")) {
             cfg.put("llmModel", "qwen2.5:7b");
@@ -151,6 +167,14 @@ public class AiOrchestrator {
                         cfg.put(normalizeConfigKey(k), v);
                     }
                 });
+                String baseUrl = str(cfg, "baseUrl", "");
+                if (!baseUrl.isBlank()) {
+                    if ("openai-compatible".equalsIgnoreCase(first.getPluginId())) {
+                        cfg.put("openaiBaseUrl", baseUrl);
+                    } else if ("ollama".equalsIgnoreCase(first.getPluginId())) {
+                        cfg.put("ollamaBaseUrl", baseUrl);
+                    }
+                }
             } catch (Exception e) {
                 log.warn("Invalid AI_PROVIDER config for library {}: {}", libraryId, e.getMessage());
             }
@@ -162,7 +186,8 @@ public class AiOrchestrator {
     }
 
     public float[] embedText(String text, Integer libraryId) {
-        return resolve(libraryId, AiTaskType.EMBED_TEXT).embedText(text, defaultConfig(libraryId));
+        return resolve(libraryId, AiTaskType.EMBED_TEXT)
+                .embedText(text, defaultConfig(libraryId, AiTaskType.EMBED_TEXT));
     }
 
     public boolean isEmbeddingAvailable() {
@@ -184,10 +209,11 @@ public class AiOrchestrator {
     }
 
     public Optional<Map<String, Object>> parseNaturalLanguage(String query) {
-        return resolve(AiTaskType.NL_QUERY).parseNaturalLanguage(query, defaultConfig());
+        return resolve(AiTaskType.NL_QUERY)
+                .parseNaturalLanguage(query, defaultConfig(AiTaskType.NL_QUERY));
     }
 
-    @Async
+    @Async("postProcessExecutor")
     public void completeMetadataAsync(Integer itemId) {
         mediaItemRepository.findById(itemId).ifPresent(item -> {
             if (item.getOverview() != null && !item.getOverview().isBlank()) {
@@ -200,7 +226,7 @@ public class AiOrchestrator {
             }
             String prompt = "Write a concise overview in the same language as the title for this media: "
                     + item.getTitle();
-            provider.completeMetadata(prompt, defaultConfig(libraryId)).ifPresent(overview ->
+            provider.completeMetadata(prompt, defaultConfig(libraryId, AiTaskType.COMPLETE_METADATA)).ifPresent(overview ->
                     aiSuggestionService.createSuggestion(item, "overview", overview, provider.providerId(), 0.8f));
         });
     }
@@ -219,16 +245,94 @@ public class AiOrchestrator {
         return v != null ? String.valueOf(v) : def;
     }
 
+    private String providerIdForTask(
+            AiTaskType taskType,
+            String defaultProviderId,
+            String llmProviderId,
+            String embedProviderId) {
+        if (taskType == AiTaskType.EMBED_TEXT) {
+            return embedProviderId;
+        }
+        if (taskType == AiTaskType.COMPLETE_METADATA
+                || taskType == AiTaskType.SUGGEST_TAGS
+                || taskType == AiTaskType.NL_QUERY) {
+            return llmProviderId;
+        }
+        return defaultProviderId;
+    }
+
+    private String baseUrlFor(String providerId, AiTaskType taskType, Map<String, Object> cfg) {
+        if ("openai-compatible".equalsIgnoreCase(providerId)) {
+            String baseUrl = firstNonBlank(
+                    openAiTaskValue(taskType, cfg, "openaiLlmBaseUrl", "openaiEmbedBaseUrl"),
+                    str(cfg, "openaiBaseUrl", null),
+                    str(cfg, "baseUrl", null),
+                    "");
+            if (baseUrl.isBlank()) {
+                log.warn("openai-compatible selected but ai.openai.base_url is empty");
+            }
+            return baseUrl;
+        }
+        if ("ollama".equalsIgnoreCase(providerId)) {
+            return firstNonBlank(str(cfg, "ollamaBaseUrl", null), str(cfg, "baseUrl", null), yamlOllamaBaseUrl);
+        }
+        return str(cfg, "baseUrl", "");
+    }
+
+    private String apiKeyFor(String providerId, AiTaskType taskType, Map<String, Object> cfg) {
+        if (!"openai-compatible".equalsIgnoreCase(providerId)) {
+            return str(cfg, "apiKey", "");
+        }
+        return firstNonBlank(
+                openAiTaskValue(taskType, cfg, "llmApiKey", "embedApiKey"),
+                str(cfg, "apiKey", null),
+                "");
+    }
+
+    private static String openAiTaskValue(
+            AiTaskType taskType,
+            Map<String, Object> cfg,
+            String llmKey,
+            String embedKey) {
+        if (taskType == AiTaskType.EMBED_TEXT) {
+            return str(cfg, embedKey, null);
+        }
+        if (taskType == AiTaskType.COMPLETE_METADATA
+                || taskType == AiTaskType.SUGGEST_TAGS
+                || taskType == AiTaskType.NL_QUERY) {
+            return str(cfg, llmKey, null);
+        }
+        return "";
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return "";
+    }
+
     private static String normalizeConfigKey(String key) {
         if (key == null) {
             return "";
         }
         return switch (key) {
             case "base_url" -> "baseUrl";
+            case "ollama_base_url" -> "ollamaBaseUrl";
+            case "openai_base_url" -> "openaiBaseUrl";
+            case "llm_base_url", "llmBaseUrl", "openai_llm_base_url", "openai.llm.base_url" -> "openaiLlmBaseUrl";
+            case "embed_base_url", "embedBaseUrl", "embedding_base_url", "openai_embed_base_url", "openai.embed.base_url" -> "openaiEmbedBaseUrl";
             case "llm_model" -> "llmModel";
             case "embed_model" -> "embedModel";
             case "api_key" -> "apiKey";
+            case "openai_api_key" -> "apiKey";
+            case "llm_api_key", "llmApiKey", "openai_llm_api_key", "openai.llm.api_key" -> "llmApiKey";
+            case "embed_api_key", "embedApiKey", "embedding_api_key", "openai_embed_api_key", "openai.embed.api_key" -> "embedApiKey";
             case "provider_id" -> "providerId";
+            case "llmProvider", "llm_provider", "llm_provider_id" -> "llmProviderId";
+            case "embedProvider", "embed_provider", "embed_provider_id" -> "embedProviderId";
             case "outbound_allowed" -> "outboundAllowed";
             case "timeout_ms" -> "timeoutMs";
             default -> key;

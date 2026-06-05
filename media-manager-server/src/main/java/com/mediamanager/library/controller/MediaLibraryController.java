@@ -83,10 +83,11 @@ public class MediaLibraryController {
     public ApiResponse<Map<String, Object>> classifyLibrary(@PathVariable Integer id) {
         boolean started = libraryClassifyJobService.startLibraryClassify(id);
         if (!started) {
+            Map<String, Object> status = libraryClassifyJobService.getStatus();
             return ApiResponse.success(Map.of(
                     "accepted", false,
-                    "message", "库级分类任务正在进行中",
-                    "status", libraryClassifyJobService.getStatus()));
+                    "message", status.get("message"),
+                    "status", status));
         }
         return ApiResponse.success(Map.of(
                 "accepted", true,
@@ -99,5 +100,12 @@ public class MediaLibraryController {
     @Operation(summary = "Library-wide classification job status")
     public ApiResponse<Map<String, Object>> classifyLibraryStatus() {
         return ApiResponse.success(libraryClassifyJobService.getStatus());
+    }
+
+    @PostMapping("/classify/cancel")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    @Operation(summary = "Cancel the running library-wide AI classification job")
+    public ApiResponse<Boolean> cancelLibraryClassify() {
+        return ApiResponse.success(libraryClassifyJobService.cancel());
     }
 }

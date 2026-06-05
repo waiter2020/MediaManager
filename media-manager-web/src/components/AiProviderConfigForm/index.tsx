@@ -4,6 +4,10 @@ import { Form, Input } from 'antd';
 export interface AiProviderConfigValues {
   baseUrl?: string;
   apiKey?: string;
+  openaiLlmBaseUrl?: string;
+  openaiEmbedBaseUrl?: string;
+  llmApiKey?: string;
+  embedApiKey?: string;
   llmModel?: string;
   embedModel?: string;
   outboundAllowed?: boolean;
@@ -28,25 +32,47 @@ const AiProviderConfigForm: React.FC<Props> = ({ providerId, value, onChange }) 
         parsed = {};
       }
     }
+    if (isOpenAi) {
+      parsed.openaiLlmBaseUrl = parsed.openaiLlmBaseUrl || parsed.baseUrl;
+      parsed.openaiEmbedBaseUrl = parsed.openaiEmbedBaseUrl || parsed.baseUrl;
+      parsed.llmApiKey = parsed.llmApiKey || parsed.apiKey;
+      parsed.embedApiKey = parsed.embedApiKey || parsed.apiKey;
+    }
     form.setFieldsValue(parsed);
-  }, [value, form]);
+  }, [value, form, isOpenAi]);
 
   const emit = (_: unknown, all: AiProviderConfigValues) => {
     const payload: AiProviderConfigValues = { ...all };
     if (!isOpenAi) {
       delete payload.apiKey;
+      delete payload.llmApiKey;
+      delete payload.embedApiKey;
+      delete payload.openaiLlmBaseUrl;
+      delete payload.openaiEmbedBaseUrl;
     }
     onChange?.(JSON.stringify(payload, null, 2));
   };
 
   return (
     <Form form={form} layout="vertical" size="small" onValuesChange={emit}>
-      <Form.Item name="baseUrl" label={isOpenAi ? 'API Base URL' : 'Ollama 地址'} rules={[{ required: true }]}>
-        <Input placeholder={isOpenAi ? 'https://api.openai.com/v1' : 'http://localhost:11434'} />
-      </Form.Item>
-      {isOpenAi && (
-        <Form.Item name="apiKey" label="API Key">
-          <Input.Password placeholder="sk-..." />
+      {isOpenAi ? (
+        <>
+          <Form.Item name="openaiLlmBaseUrl" label="LLM API Base URL" rules={[{ required: true }]}>
+            <Input placeholder="https://api.openai.com/v1" />
+          </Form.Item>
+          <Form.Item name="llmApiKey" label="LLM API Key">
+            <Input.Password placeholder="sk-..." />
+          </Form.Item>
+          <Form.Item name="openaiEmbedBaseUrl" label="Embedding API Base URL" rules={[{ required: true }]}>
+            <Input placeholder="https://api.openai.com/v1" />
+          </Form.Item>
+          <Form.Item name="embedApiKey" label="Embedding API Key">
+            <Input.Password placeholder="sk-..." />
+          </Form.Item>
+        </>
+      ) : (
+        <Form.Item name="baseUrl" label="Ollama 地址" rules={[{ required: true }]}>
+          <Input placeholder="http://localhost:11434" />
         </Form.Item>
       )}
       <Form.Item name="llmModel" label="LLM 模型" rules={[{ required: true }]}>

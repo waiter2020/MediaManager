@@ -12,7 +12,6 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.core.io.support.ResourceRegion;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpRange;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -26,7 +25,6 @@ import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.List;
 
 @Slf4j
 @Service
@@ -37,7 +35,7 @@ public class StreamService {
     private final LibraryAccessService libraryAccessService;
     private final StoragePathMapper storagePathMapper;
 
-    private static final long CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    private static final long CHUNK_SIZE = 4L * 1024 * 1024;
 
     @org.springframework.beans.factory.annotation.Value("${mediamanager.data.cache-dir:./data/cache}")
     private String cacheDir;
@@ -60,20 +58,19 @@ public class StreamService {
         }
     }
 
-    public ResourceRegion getResourceRegion(Resource resource, HttpHeaders headers) throws IOException {
-        long contentLength = resource.contentLength();
-        List<HttpRange> ranges = headers.getRange();
-
-        if (!ranges.isEmpty()) {
-            HttpRange range = ranges.get(0);
-            long start = range.getRangeStart(contentLength);
-            long end = range.getRangeEnd(contentLength);
-            long rangeLength = Math.min(CHUNK_SIZE, end - start + 1);
-            return new ResourceRegion(resource, start, rangeLength);
-        } else {
-            long rangeLength = Math.min(CHUNK_SIZE, contentLength);
-            return new ResourceRegion(resource, 0, rangeLength);
+    public ResourceRegion getResourceRegion(Resource resource, HttpRange range, long contentLength) {
+        if (contentLength <= 0) {
+            throw new IllegalArgumentException("Cannot serve a range from an empty resource");
         }
+
+        long start = range.getRangeStart(contentLength);
+        long requestedEnd = range.getRangeEnd(contentLength);
+        if (start < 0 || start >= contentLength || requestedEnd < start) {
+            throw new IllegalArgumentException("Requested range is outside the resource");
+        }
+
+        long end = Math.min(requestedEnd, Math.min(contentLength - 1, start + CHUNK_SIZE - 1));
+        return new ResourceRegion(resource, start, end - start + 1);
     }
 
     public ResponseEntity<Resource> getImageResource(Integer fileId, Integer width) throws IOException {
