@@ -41,6 +41,28 @@ public interface MediaItemRepository extends JpaRepository<MediaItem, Integer>, 
 
     long countByTypeAndHiddenFalse(String type);
 
+    interface TypeUsageProjection {
+        String getMediaType();
+        Long getUsageCount();
+    }
+
+    @Query(value = """
+            SELECT
+                mi.type AS mediaType,
+                COUNT(DISTINCT mi.id) AS usageCount
+            FROM media_item mi
+            WHERE (mi.hidden = FALSE OR mi.hidden IS NULL)
+              AND mi.library_id IN (:libraryIds)
+            GROUP BY mi.type
+            HAVING COUNT(DISTINCT mi.id) >= :minUsage
+            ORDER BY COUNT(DISTINCT mi.id) DESC, mi.type ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<TypeUsageProjection> findVisibleTypeUsageCounts(
+            @Param("libraryIds") Collection<Integer> libraryIds,
+            @Param("minUsage") int minUsage,
+            @Param("limit") int limit);
+
     List<MediaItem> findByStatus(String status);
     List<MediaItem> findByLibraryIdAndStatus(Integer libraryId, String status);
     List<MediaItem> findByLibraryId(Integer libraryId);

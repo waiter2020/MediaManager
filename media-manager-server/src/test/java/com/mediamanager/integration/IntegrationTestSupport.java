@@ -18,7 +18,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Set;
 
-public abstract class IntegrationTestSupport {
+public abstract class IntegrationTestSupport extends PostgresIntegrationTestBase {
 
     @Autowired
     protected SysUserRepository userRepository;

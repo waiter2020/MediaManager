@@ -6,6 +6,7 @@ import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.service.LocalArtworkService;
+import com.mediamanager.media.service.MediaChapterService;
 import com.mediamanager.media.service.MediaPostProcessService;
 import com.mediamanager.media.service.MediaSubtitleService;
 import com.mediamanager.metadata.service.MetadataApplyService;
@@ -37,6 +38,7 @@ public class FileScanProcessor {
     private final MetadataApplyService metadataApplyService;
     private final FileNameParser fileNameParser;
     private final MediaPostProcessService mediaPostProcessService;
+    private final MediaChapterService mediaChapterService;
     private final MediaSubtitleService mediaSubtitleService;
     private final LocalArtworkService localArtworkService;
 
@@ -113,6 +115,9 @@ public class FileScanProcessor {
             if (existing.getMediaItem() != null) {
                 existing.getMediaItem().setLastScannedAt(Instant.now());
                 itemRepository.save(existing.getMediaItem());
+            }
+            if (isVideoMediaType(mediaType) && mediaChapterService.needsChaptersForFile(existing)) {
+                enqueueChapterExtractionAfterCommit(existing.getId());
             }
             return ScanResult.of(ScanOutcome.UNCHANGED);
         }
@@ -283,6 +288,26 @@ public class FileScanProcessor {
                 mediaPostProcessService.afterMetadataUpdatedAsync(itemId);
             }
         });
+    }
+
+    private void enqueueChapterExtractionAfterCommit(Integer mediaFileId) {
+        if (mediaFileId == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            mediaChapterService.ensureChaptersForFileAsync(mediaFileId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                mediaChapterService.ensureChaptersForFileAsync(mediaFileId);
+            }
+        });
+    }
+
+    private boolean isVideoMediaType(String mediaType) {
+        return "MOVIE".equals(mediaType) || "TV_SHOW".equals(mediaType) || "EPISODE".equals(mediaType);
     }
 
     private static String describeError(Throwable error) {

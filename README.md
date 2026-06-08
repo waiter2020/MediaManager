@@ -8,11 +8,17 @@
 
 ```mermaid
 graph TD
-    Client[React/UmiJS 网页端] <-->|HTTP API / SSE 事件流| Nginx{Nginx 反向代理}
-    Nginx <-->|静态资源 / API 路由| Backend[Spring Boot 21 后端]
-    Backend -->|数据存储| SQLite[(SQLite 数据库)]
+    Client[React/UmiJS 网页端] <-->|HTTP API / SSE 事件流| Container[Docker 单容器]
+    subgraph Container [mediamanager 容器]
+        Nginx[Nginx 反向代理]
+        Backend[Spring Boot 21 后端]
+        PostgreSQL[(内嵌 PostgreSQL)]
+        Cache[HLS & 缩略图缓存]
+    end
+    Nginx <-->|静态资源 / API 路由| Backend
+    Backend --> PostgreSQL
     Backend -->|向量索引 & 全文检索| Search[FTS & Vector Indexing]
-    Backend -->|多线程刮削 & 缓存| Cache[HLS & Metadata Cache]
+    Backend --> Cache
     Backend -->|文件监听| Watcher[Directory WatchService]
     Backend <-->|大模型元数据补全/向量化| Ollama[Ollama / OpenAI API]
 ```
@@ -42,6 +48,7 @@ graph TD
 
 ```powershell
 $env:JWT_SECRET="change-me-in-production-256-bit-key"
+$env:POSTGRES_PASSWORD="change-me-in-production"
 $env:HOST_MEDIA_PATH="E:\Movies"
 ```
 
@@ -67,11 +74,14 @@ docker-compose logs -f
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `JWT_SECRET` | JWT 签名密钥，生产环境必须修改 | `change-me...` |
+| `POSTGRES_PASSWORD` | 内嵌 PostgreSQL 密码（生产环境必须修改） | `mediamanager` |
 | `HOST_MEDIA_PATH` | 宿主机媒体目录 | `./media` |
 | `MEDIAMANAGER_STORAGE_PATH_MAP_FROM` | 数据库中保存的旧路径前缀 | 同 `HOST_MEDIA_PATH` |
 | `MEDIAMANAGER_STORAGE_PATH_MAP_TO` | 容器内映射路径 | `/home/media` |
 
 容器内会将 `HOST_MEDIA_PATH` 映射到 `/home/media`，用于兼容数据库里已经保存的 Windows 绝对路径，避免播放时出现 `40404 Media file not found`。
+
+PostgreSQL 数据持久化在 `./data/postgres`（通过 `./data` 卷挂载），与缩略图/HLS 缓存共用 `./data` 目录。
 
 ## 功能入口
 

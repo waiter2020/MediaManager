@@ -13,7 +13,7 @@ public class AiOrganizationRequest {
     private Boolean recolorManualTags = false;
     private Boolean createSmartCollections = true;
     private Integer lowUsageThreshold = 1;
-    private Integer maxCollections = 5;
+    private Integer maxCollections = 20;
     private Integer minCollectionTagUsage = 3;
     private Integer collectionItemLimit = 50;
 }

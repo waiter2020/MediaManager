@@ -3,6 +3,7 @@ package com.mediamanager.ai.service;
 import com.mediamanager.ai.dto.AiOrganizationRequest;
 import com.mediamanager.ai.dto.AiOrganizationResponse;
 import com.mediamanager.classification.entity.Tag;
+import com.mediamanager.classification.repository.CategoryRepository;
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.classification.service.TagCanonicalizationService;
 import com.mediamanager.classification.service.TagColorService;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
 
 @Service
@@ -27,6 +29,7 @@ import java.util.List;
 public class AiOrganizationWorker {
 
     private final TagRepository tagRepository;
+    private final CategoryRepository categoryRepository;
     private final TagCanonicalizationService tagCanonicalizationService;
     private final TagColorService tagColorService;
     private final MediaCollectionService mediaCollectionService;
@@ -46,6 +49,9 @@ public class AiOrganizationWorker {
         return tagRepository.findAll().stream()
                 .filter(tag -> tag != null && tag.getId() != null)
                 .map(tag -> new TagSnapshot(tag.getId(), tag.getName()))
+                .sorted(Comparator.comparing(
+                        snapshot -> safe(snapshot.name()),
+                        String.CASE_INSENSITIVE_ORDER))
                 .toList();
     }
 
@@ -56,8 +62,9 @@ public class AiOrganizationWorker {
             return false;
         }
         entityManager.createNativeQuery("""
-                INSERT OR IGNORE INTO media_item_tag (media_item_id, tag_id)
+                INSERT INTO media_item_tag (media_item_id, tag_id)
                 SELECT media_item_id, :canonicalId FROM media_item_tag WHERE tag_id = :duplicateId
+                ON CONFLICT DO NOTHING
                 """)
                 .setParameter("canonicalId", canonicalId)
                 .setParameter("duplicateId", duplicateId)
@@ -145,26 +152,22 @@ public class AiOrganizationWorker {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AiOrganizationResponse.GeneratedCollection createSmartCollection(
             AiOrganizationRequest request,
-            AiOrganizationResponse.TagUsage candidate) {
-        if (candidate == null || candidate.getId() == null || !tagRepository.existsById(candidate.getId())) {
+            AiOrganizationResponse.SmartCollectionCandidate candidate) {
+        if (!isValidCollectionCandidate(candidate)) {
             return notCreated(candidate);
         }
         SysUser user = securityCurrentUser.requireCurrentUser();
-        String name = "AI - " + candidate.getName();
+        String name = candidate.getName();
         if (collectionRepository.existsByOwner_IdAndNameIgnoreCase(user.getId(), name)) {
             return notCreated(candidate);
         }
 
-        MediaCollectionRuleDto rule = new MediaCollectionRuleDto();
-        rule.setLibraryId(request.getLibraryId());
-        rule.setTagIds(List.of(candidate.getId()));
-        rule.setLimit(request.getCollectionItemLimit());
-        rule.setSortField("rating");
-        rule.setSortOrder("DESC");
+        MediaCollectionRuleDto rule = ruleForCandidate(request, candidate);
 
         MediaCollectionCreateRequest createRequest = new MediaCollectionCreateRequest();
         createRequest.setName(name);
-        createRequest.setDescription("Smart collection for tag " + candidate.getName());
+        createRequest.setDescription("AI smart collection for "
+                + safe(candidate.getDimensionLabel()) + " " + safe(candidate.getDisplayValue()));
         createRequest.setType("COLLECTION");
         createRequest.setVisibility("PRIVATE");
         createRequest.setSmart(true);
@@ -174,18 +177,83 @@ public class AiOrganizationWorker {
         return AiOrganizationResponse.GeneratedCollection.builder()
                 .id(created.getId())
                 .name(created.getName())
-                .tagId(candidate.getId())
-                .tagName(candidate.getName())
+                .dimension(candidate.getDimension())
+                .dimensionLabel(candidate.getDimensionLabel())
+                .value(candidate.getValue())
+                .displayValue(candidate.getDisplayValue())
+                .tagId(candidate.getTagId())
+                .tagName(candidate.getTagName())
+                .categoryId(candidate.getCategoryId())
+                .categoryName(candidate.getCategoryName())
+                .metadataField(candidate.getMetadataField())
+                .metadataValue(candidate.getMetadataValue())
                 .itemCount((long) (created.getItemCount() != null ? created.getItemCount() : 0))
                 .created(true)
                 .build();
     }
 
-    private AiOrganizationResponse.GeneratedCollection notCreated(AiOrganizationResponse.TagUsage candidate) {
+    private boolean isValidCollectionCandidate(AiOrganizationResponse.SmartCollectionCandidate candidate) {
+        if (candidate == null || candidate.getName() == null || candidate.getName().isBlank()) {
+            return false;
+        }
+        String dimension = safe(candidate.getDimension());
+        if ("TAG".equals(dimension)) {
+            return candidate.getTagId() != null && tagRepository.existsById(candidate.getTagId());
+        }
+        if ("CATEGORY".equals(dimension)) {
+            return candidate.getCategoryId() != null && categoryRepository.existsById(candidate.getCategoryId());
+        }
+        if (candidate.getMetadataField() != null && candidate.getMetadataValue() != null) {
+            return !candidate.getMetadataField().isBlank() && !candidate.getMetadataValue().isBlank();
+        }
+        return "TYPE".equals(dimension) && candidate.getValue() != null && !candidate.getValue().isBlank();
+    }
+
+    private MediaCollectionRuleDto ruleForCandidate(
+            AiOrganizationRequest request,
+            AiOrganizationResponse.SmartCollectionCandidate candidate) {
+        MediaCollectionRuleDto rule = new MediaCollectionRuleDto();
+        rule.setLibraryId(request.getLibraryId());
+        rule.setLimit(request.getCollectionItemLimit());
+        rule.setSortField(sortFieldForCandidate(candidate));
+        rule.setSortOrder("DESC");
+
+        String dimension = safe(candidate.getDimension());
+        if ("TYPE".equals(dimension)) {
+            rule.setType(candidate.getValue());
+        } else if ("TAG".equals(dimension)) {
+            rule.setTagIds(List.of(candidate.getTagId()));
+        } else if ("CATEGORY".equals(dimension)) {
+            rule.setCategoryIds(List.of(candidate.getCategoryId()));
+        } else {
+            rule.setMetadataField(candidate.getMetadataField());
+            rule.setMetadataValue(candidate.getMetadataValue());
+        }
+        return rule;
+    }
+
+    private String sortFieldForCandidate(AiOrganizationResponse.SmartCollectionCandidate candidate) {
+        String value = safe(candidate != null ? candidate.getValue() : null);
+        if ("IMAGE".equalsIgnoreCase(value) || "AUDIO".equalsIgnoreCase(value)) {
+            return "createdAt";
+        }
+        return "rating";
+    }
+
+    private AiOrganizationResponse.GeneratedCollection notCreated(
+            AiOrganizationResponse.SmartCollectionCandidate candidate) {
         return AiOrganizationResponse.GeneratedCollection.builder()
-                .name(candidate != null ? "AI - " + candidate.getName() : "AI collection")
-                .tagId(candidate != null ? candidate.getId() : null)
-                .tagName(candidate != null ? candidate.getName() : null)
+                .name(candidate != null ? candidate.getName() : "AI collection")
+                .dimension(candidate != null ? candidate.getDimension() : null)
+                .dimensionLabel(candidate != null ? candidate.getDimensionLabel() : null)
+                .value(candidate != null ? candidate.getValue() : null)
+                .displayValue(candidate != null ? candidate.getDisplayValue() : null)
+                .tagId(candidate != null ? candidate.getTagId() : null)
+                .tagName(candidate != null ? candidate.getTagName() : null)
+                .categoryId(candidate != null ? candidate.getCategoryId() : null)
+                .categoryName(candidate != null ? candidate.getCategoryName() : null)
+                .metadataField(candidate != null ? candidate.getMetadataField() : null)
+                .metadataValue(candidate != null ? candidate.getMetadataValue() : null)
                 .itemCount(candidate != null ? candidate.getUsageCount() : 0L)
                 .created(false)
                 .build();

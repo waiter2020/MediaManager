@@ -27,7 +27,7 @@ public class AiOrganizationResponse {
     private List<TagUsage> unusedTags;
     private List<TagUsage> cleanupTags;
     private List<DuplicateTagGroup> duplicateTagGroups;
-    private List<TagUsage> smartCollectionCandidates;
+    private List<SmartCollectionCandidate> smartCollectionCandidates;
     private List<GeneratedCollection> generatedCollections;
 
     @Data
@@ -57,11 +57,41 @@ public class AiOrganizationResponse {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class SmartCollectionCandidate {
+        private String key;
+        private String dimension;
+        private String dimensionLabel;
+        private String name;
+        private String value;
+        private String displayValue;
+        private String color;
+        private String source;
+        private Long usageCount;
+        private Integer tagId;
+        private String tagName;
+        private Integer categoryId;
+        private String categoryName;
+        private String metadataField;
+        private String metadataValue;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class GeneratedCollection {
         private Integer id;
         private String name;
+        private String dimension;
+        private String dimensionLabel;
+        private String value;
+        private String displayValue;
         private Integer tagId;
         private String tagName;
+        private Integer categoryId;
+        private String categoryName;
+        private String metadataField;
+        private String metadataValue;
         private Long itemCount;
         private Boolean created;
     }

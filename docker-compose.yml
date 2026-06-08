@@ -26,6 +26,13 @@ services:
       - MEDIAMANAGER_FFPROBE_PATH=/usr/bin/ffprobe
       # Ollama on host (semantic search / AI); override in .env or sys_config
       - MEDIAMANAGER_AI_OLLAMA_BASE_URL=${MEDIAMANAGER_AI_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Embedded PostgreSQL (runs inside this container)
+      - POSTGRES_HOST=127.0.0.1
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-mediamanager}
+      - POSTGRES_USER=${POSTGRES_USER:-mediamanager}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mediamanager}
+      - PGDATA=/app/data/postgres
       # Map persisted host paths to the container mount.
       # If playback returns 40404, set HOST_MEDIA_PATH to the host path stored in the DB,
       # or override MEDIAMANAGER_STORAGE_PATH_MAP_FROM explicitly.
@@ -33,15 +40,7 @@ services:
       - MEDIAMANAGER_STORAGE_PATH_MAP_TO=${MEDIAMANAGER_STORAGE_PATH_MAP_TO:-/home/media}
     volumes:
       - ./media:/media:ro # Optional: mount local media folder read-only
-      - ./data:/app/data  # Mount data for SQLite and cache storage
-
-      version: '3.8'
-
-    build: .
-      - ./media:/media:ro # Mount media read-only
-      # Optional extra library path (set in .env, e.g. TEST_MEDIA_PATH=E:\Videos)
-      # - ${TEST_MEDIA_PATH}:/home/test_media:ro
-      # Override HOST_MEDIA_PATH in .env (Windows example: E:\Movies)
+      - ./data:/app/data  # PostgreSQL data + cache (thumbnails / HLS segments)
       - ${HOST_MEDIA_PATH:-./media}:/home/media:ro
     restart: unless-stopped
     healthcheck:
@@ -49,4 +48,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 60s

@@ -10,6 +10,11 @@ import { getDiscover } from '@/services/discover';
 import type { MediaItem } from '@/types/media';
 import './index.css';
 
+const DISCOVER_ROW_AUTOPLAY_PROPS = {
+  autoCarousel: true,
+  thumbnailPreviewMode: 'always' as const,
+};
+
 const DiscoverPage: React.FC = () => {
   const access = useAccess();
   const [continueWatching, setContinueWatching] = useState<MediaItem[]>([]);
@@ -69,25 +74,56 @@ const DiscoverPage: React.FC = () => {
           items={continueWatching}
           loading={loading}
           playMode="resume"
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
         />
       )}
       {watchlist.length > 0 && (
-        <HorizontalMediaRow title="Watchlist" items={watchlist} loading={loading} />
+        <HorizontalMediaRow
+          title="Watchlist"
+          items={watchlist}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {recommended.length > 0 && (
-        <HorizontalMediaRow title="为你推荐" items={recommended} loading={loading} />
+        <HorizontalMediaRow
+          title="为你推荐"
+          items={recommended}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {favorites.length > 0 && (
-        <HorizontalMediaRow title="最近收藏" items={favorites} loading={loading} />
+        <HorizontalMediaRow
+          title="最近收藏"
+          items={favorites}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {topRated.length > 0 && (
-        <HorizontalMediaRow title="高分内容" items={topRated} loading={loading} />
+        <HorizontalMediaRow
+          title="高分内容"
+          items={topRated}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {unwatched.length > 0 && (
-        <HorizontalMediaRow title="还没看" items={unwatched} loading={loading} />
+        <HorizontalMediaRow
+          title="还没看"
+          items={unwatched}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {recentlyAdded.length > 0 && (
-        <HorizontalMediaRow title="最近添加" items={recentlyAdded} loading={loading} />
+        <HorizontalMediaRow
+          title="最近添加"
+          items={recentlyAdded}
+          loading={loading}
+          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+        />
       )}
       {empty && (
         <EmptyState

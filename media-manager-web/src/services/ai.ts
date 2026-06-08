@@ -1,5 +1,5 @@
 import { request } from '@umijs/max';
-import type { ApiResponse } from '@/types/api';
+import type { ApiResponse, PageResult } from '@/types/api';
 
 export interface AiConfigPayload {
   defaultProvider: string;
@@ -89,6 +89,24 @@ export interface AiOrganizationTagUsage {
   cleanupReason?: string;
 }
 
+export interface AiOrganizationSmartCollectionCandidate {
+  key?: string;
+  dimension?: string;
+  dimensionLabel?: string;
+  name: string;
+  value?: string;
+  displayValue?: string;
+  color?: string;
+  source?: string;
+  usageCount?: number;
+  tagId?: number;
+  tagName?: string;
+  categoryId?: number;
+  categoryName?: string;
+  metadataField?: string;
+  metadataValue?: string;
+}
+
 export interface AiOrganizationDuplicateGroup {
   semanticKey: string;
   canonicalTag: AiOrganizationTagUsage;
@@ -98,8 +116,16 @@ export interface AiOrganizationDuplicateGroup {
 export interface AiOrganizationGeneratedCollection {
   id?: number;
   name: string;
-  tagId: number;
-  tagName: string;
+  dimension?: string;
+  dimensionLabel?: string;
+  value?: string;
+  displayValue?: string;
+  tagId?: number;
+  tagName?: string;
+  categoryId?: number;
+  categoryName?: string;
+  metadataField?: string;
+  metadataValue?: string;
   itemCount?: number;
   created?: boolean;
 }
@@ -120,7 +146,7 @@ export interface AiOrganizationResponse {
   unusedTags?: AiOrganizationTagUsage[];
   cleanupTags?: AiOrganizationTagUsage[];
   duplicateTagGroups?: AiOrganizationDuplicateGroup[];
-  smartCollectionCandidates?: AiOrganizationTagUsage[];
+  smartCollectionCandidates?: AiOrganizationSmartCollectionCandidate[];
   generatedCollections?: AiOrganizationGeneratedCollection[];
 }
 
@@ -178,8 +204,11 @@ export async function updateAiConfig(data: AiConfigPayload) {
   });
 }
 
-export async function listAiSuggestions() {
-  return request<ApiResponse<AiSuggestion[]>>('/api/v1/ai/suggestions', { method: 'GET' });
+export async function listAiSuggestions(params?: { page?: number; size?: number }) {
+  return request<ApiResponse<PageResult<AiSuggestion>>>('/api/v1/ai/suggestions', {
+    method: 'GET',
+    params,
+  });
 }
 
 export async function approveSuggestion(id: number) {
@@ -194,6 +223,12 @@ export async function batchApproveSuggestions(ids: number[]) {
   return request<ApiResponse<BatchSuggestionResult>>('/api/v1/ai/suggestions/batch-approve', {
     method: 'POST',
     data: { ids },
+  });
+}
+
+export async function approveAllSuggestions() {
+  return request<ApiResponse<BatchSuggestionResult>>('/api/v1/ai/suggestions/approve-all', {
+    method: 'POST',
   });
 }
 

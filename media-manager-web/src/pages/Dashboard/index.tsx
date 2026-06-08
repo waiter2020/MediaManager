@@ -14,12 +14,17 @@ import HorizontalMediaRow from '@/components/HorizontalMediaRow';
 import SystemCapabilitiesCard from '@/components/SystemCapabilitiesCard';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { getDiscover } from '@/services/discover';
+import { getLibraries } from '@/services/library';
+import { getItems } from '@/services/media';
 import { getSystemInfo, type SystemInfo } from '@/services/system';
 import type { ScanProgress } from '@/models/global';
+import type { MediaLibrary } from '@/types/library';
 import type { MediaItem } from '@/types/media';
 import './index.css';
 
 type StatField = 'videoCount' | 'imageCount' | 'audioCount' | 'totalLibraries' | 'tagCount' | 'totalMediaItems';
+
+const LIBRARY_ROW_ITEM_LIMIT = 20;
 
 interface StatCard {
   key: string;
@@ -29,6 +34,11 @@ interface StatCard {
   field: StatField;
   fallback?: StatField;
   link: string;
+}
+
+interface LibraryMediaRow {
+  library: MediaLibrary;
+  items: MediaItem[];
 }
 
 const STAT_CARDS: StatCard[] = [
@@ -61,6 +71,7 @@ const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<SystemInfo | null>(null);
   const [recentItems, setRecentItems] = useState<MediaItem[]>([]);
   const [continueWatching, setContinueWatching] = useState<MediaItem[]>([]);
+  const [libraryRows, setLibraryRows] = useState<LibraryMediaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const { scanStatus } = useModel('global');
 
@@ -68,15 +79,37 @@ const Dashboard: React.FC = () => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [infoRes, discoverRes] = await Promise.all([
+        const [infoRes, discoverRes, librariesRes] = await Promise.all([
           getSystemInfo(),
           getDiscover(20).catch(() => null),
+          getLibraries().catch(() => null),
         ]);
 
         if (infoRes?.code === 200) setStats(infoRes.data);
         if (discoverRes?.code === 200 && discoverRes.data) {
           setRecentItems(discoverRes.data.recentlyAdded || []);
           setContinueWatching(discoverRes.data.continueWatching || []);
+        }
+        if (librariesRes?.code === 200) {
+          const rows = await Promise.all(
+            (librariesRes.data || []).map(async (library) => {
+              const itemsRes = await getItems({
+                libraryId: library.id,
+                page: 1,
+                size: LIBRARY_ROW_ITEM_LIMIT,
+                sortField: 'createdAt',
+                sortOrder: 'desc',
+              }).catch(() => null);
+
+              return {
+                library,
+                items: itemsRes?.code === 200 ? itemsRes.data?.items || [] : [],
+              };
+            }),
+          );
+          setLibraryRows(rows.filter((row) => row.items.length > 0));
+        } else {
+          setLibraryRows([]);
         }
       } finally {
         setLoading(false);
@@ -152,7 +185,23 @@ const Dashboard: React.FC = () => {
           />
         </div>
 
-        {!loading && recentItems.length === 0 && continueWatching.length === 0 && (
+        {libraryRows.length > 0 && (
+          <div className="library-rows">
+            {libraryRows.map((row) => (
+              <HorizontalMediaRow
+                key={row.library.id}
+                title={row.library.name}
+                items={row.items}
+                viewAllLink={`/browse?libraryId=${row.library.id}`}
+                loading={loading}
+                autoCarousel
+                thumbnailPreviewMode="always"
+              />
+            ))}
+          </div>
+        )}
+
+        {!loading && recentItems.length === 0 && continueWatching.length === 0 && libraryRows.length === 0 && (
           <EmptyState
             description={
               stats?.hasViewableLibraries === false

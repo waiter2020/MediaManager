@@ -43,6 +43,7 @@ import IdentifyModal from '@/components/IdentifyModal';
 import TagSelect from '@/components/TagSelect';
 import TvSeasonPanel, { type TvSeason } from '@/components/TvSeasonPanel';
 import { openPlayerWindow } from '@/utils/playerWindow';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { addTagToItem, getTags, removeTagFromItem, type CategoryItem, type TagItem } from '@/services/classification';
 import {
   classifyItem,
@@ -270,6 +271,7 @@ const MediaDetail: React.FC = () => {
   const [subtitleLanguage, setSubtitleLanguage] = useState('zh-CN');
   const [subtitleSearchLoading, setSubtitleSearchLoading] = useState(false);
   const [subtitleResults, setSubtitleResults] = useState<SubtitleSearchResult[]>([]);
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const numericId = Number(id);
 
@@ -544,7 +546,7 @@ const MediaDetail: React.FC = () => {
   const canPreviewPoster = PREVIEWABLE_TYPES.has(data.type);
   const posterPreviewVideoUrl = data.fileIds?.length ? getFileStreamUrl(data.fileIds[0]) : null;
   const showPosterVideoPreview =
-    posterHovered && canPreviewPoster && !!posterPreviewVideoUrl && !posterPreviewVideoError;
+    !autoplayDisabled && posterHovered && canPreviewPoster && !!posterPreviewVideoUrl && !posterPreviewVideoError;
   const vm = buildMetadata(data);
   const overviewFields = vm.overview.filter((field) => field.value != null && field.value !== '');
   const metadataFields = vm.metadata.filter((field) => field.value != null && field.value !== '');
@@ -626,6 +628,7 @@ const MediaDetail: React.FC = () => {
         <div className="detail-chapters-strip">
           {chapters.map((chapter) => {
             const previewing =
+              !autoplayDisabled &&
               access.canPlayMedia &&
               hoveredChapterId === chapter.id &&
               !chapterPreviewErrorIds.includes(chapter.id);
@@ -639,9 +642,9 @@ const MediaDetail: React.FC = () => {
                 type="button"
                 className="detail-chapter-card"
                 aria-disabled={!access.canPlayMedia}
-                onMouseEnter={() => access.canPlayMedia && setHoveredChapterId(chapter.id)}
+                onMouseEnter={() => !autoplayDisabled && access.canPlayMedia && setHoveredChapterId(chapter.id)}
                 onMouseLeave={() => setHoveredChapterId((current) => (current === chapter.id ? null : current))}
-                onFocus={() => access.canPlayMedia && setHoveredChapterId(chapter.id)}
+                onFocus={() => !autoplayDisabled && access.canPlayMedia && setHoveredChapterId(chapter.id)}
                 onBlur={() => setHoveredChapterId((current) => (current === chapter.id ? null : current))}
                 onClick={() => openChapter(chapter)}
               >
@@ -869,7 +872,7 @@ const MediaDetail: React.FC = () => {
         <div className="detail-hero-content">
           <div
             className="detail-poster"
-            onMouseEnter={() => setPosterHovered(true)}
+            onMouseEnter={() => !autoplayDisabled && setPosterHovered(true)}
             onMouseLeave={() => setPosterHovered(false)}
           >
             {posterUrl ? (

@@ -295,7 +295,9 @@ public class MediaCollectionService {
                 toIdSet(rule.getTagIds()),
                 rule.getMinYear(),
                 rule.getMaxYear(),
-                rule.getMinRating());
+                rule.getMinRating(),
+                rule.getMetadataField(),
+                rule.getMetadataValue());
         Page<MediaItem> itemPage = mediaItemRepository.findAll(
                 spec,
                 PageRequest.of(page - 1, size, resolveRuleSort(rule.getSortField(), rule.getSortOrder())));
@@ -323,7 +325,9 @@ public class MediaCollectionService {
                 toIdSet(rule.getTagIds()),
                 rule.getMinYear(),
                 rule.getMaxYear(),
-                rule.getMinRating());
+                rule.getMinRating(),
+                rule.getMetadataField(),
+                rule.getMetadataValue());
 
         List<MediaItem> items = mediaItemRepository.findAll(
                         spec,
@@ -399,6 +403,12 @@ public class MediaCollectionService {
     private MediaCollectionRuleDto normalizeRule(MediaCollectionRuleDto rule) {
         MediaCollectionRuleDto normalized = rule != null ? rule : new MediaCollectionRuleDto();
         normalized.setType(normalizeRuleType(normalized.getType()));
+        normalized.setMetadataField(normalizeMetadataField(normalized.getMetadataField()));
+        normalized.setMetadataValue(trimToNull(normalized.getMetadataValue()));
+        if (normalized.getMetadataField() == null || normalized.getMetadataValue() == null) {
+            normalized.setMetadataField(null);
+            normalized.setMetadataValue(null);
+        }
         normalized.setSortField(normalizeRuleSortField(normalized.getSortField()));
         normalized.setSortOrder("ASC".equalsIgnoreCase(normalized.getSortOrder()) ? "ASC" : "DESC");
         normalized.setLimit(normalizeLimit(normalized.getLimit()));
@@ -408,6 +418,23 @@ public class MediaCollectionService {
     private String normalizeRuleType(String type) {
         String value = trimToNull(type);
         return value == null ? null : value.toUpperCase(Locale.ROOT);
+    }
+
+    private String normalizeMetadataField(String metadataField) {
+        String value = trimToNull(metadataField);
+        if (value == null) {
+            return null;
+        }
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "genre", "genres" -> "genre";
+            case "studio", "studios", "publisher" -> "studio";
+            case "network" -> "network";
+            case "actor", "cast", "performer" -> "actor";
+            case "artist" -> "artist";
+            case "album" -> "album";
+            case "camera" -> "camera";
+            default -> null;
+        };
     }
 
     private String normalizeRuleSortField(String sortField) {

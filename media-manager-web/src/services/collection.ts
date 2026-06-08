@@ -26,6 +26,8 @@ export interface CollectionRule {
   keyword?: string;
   categoryIds?: number[];
   tagIds?: number[];
+  metadataField?: 'genre' | 'studio' | 'network' | 'actor' | 'artist' | 'album' | 'camera';
+  metadataValue?: string;
   minYear?: number;
   maxYear?: number;
   minRating?: number;

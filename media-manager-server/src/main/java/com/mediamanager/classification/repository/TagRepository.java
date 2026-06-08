@@ -51,7 +51,7 @@ public interface TagRepository extends JpaRepository<Tag, Integer> {
             FROM tag t
             JOIN media_item_tag mit ON mit.tag_id = t.id
             JOIN media_item mi ON mi.id = mit.media_item_id
-            WHERE (mi.hidden = 0 OR mi.hidden IS NULL)
+            WHERE (mi.hidden = FALSE OR mi.hidden IS NULL)
               AND mi.library_id IN (:libraryIds)
             GROUP BY t.id, t.name, t.color, t.source, t.created_at
             HAVING COUNT(DISTINCT mit.media_item_id) >= :minUsage

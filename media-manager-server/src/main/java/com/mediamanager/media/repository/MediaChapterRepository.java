@@ -14,6 +14,8 @@ public interface MediaChapterRepository extends JpaRepository<MediaChapter, Inte
 
     List<MediaChapter> findByMediaFileIdOrderByChapterIndexAsc(Integer mediaFileId);
 
+    boolean existsByMediaFileId(Integer mediaFileId);
+
     @Query("""
             SELECT c FROM MediaChapter c
             JOIN FETCH c.mediaFile f

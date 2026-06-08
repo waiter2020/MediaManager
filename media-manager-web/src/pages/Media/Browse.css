@@ -296,7 +296,8 @@
   }
 
   .browse-toolbar-left .ant-btn {
-    flex: 1 1 0;
+    flex: 0 0 auto;
+    min-width: max-content;
   }
 
   .browse-toolbar-right {
@@ -311,6 +312,7 @@
 
   .browse-toolbar-right > .ant-btn {
     flex: 1 1 140px;
+    min-width: max-content;
   }
 
   .media-list {
@@ -326,9 +328,9 @@
   }
 
   .media-list-poster {
-    flex-basis: 46px;
-    width: 46px;
-    height: 64px;
+    flex-basis: 62px;
+    width: 62px;
+    height: 88px;
   }
 
   .media-list-meta {
@@ -355,6 +357,7 @@
 
   .browse-toolbar-left .ant-btn,
   .browse-toolbar-right > .ant-btn {
-    flex-basis: calc(50% - 5px);
+    flex: 1 1 auto;
+    min-width: max-content;
   }
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Drawer,
@@ -34,6 +34,7 @@ import EmptyState from '@/components/EmptyState';
 import MediaCard from '@/components/MediaCard';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { openPlayerWindow } from '@/utils/playerWindow';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaItem } from '@/types/media';
 import type { MediaLibrary } from '@/types/library';
@@ -89,9 +90,33 @@ function parseNumberListParam(params: URLSearchParams, key: string): number[] {
   return Array.from(new Set(values));
 }
 
+function parsePositiveNumberParam(params: URLSearchParams, key: string): number | null {
+  const rawValue = params.get(key);
+  if (!rawValue) {
+    return null;
+  }
+  const value = Number(rawValue);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function parseBrowseSearchState(search: string) {
+  const params = new URLSearchParams(search);
+  const query = params.get('q') ?? params.get('query') ?? '';
+
+  return {
+    libraryId: parsePositiveNumberParam(params, 'libraryId'),
+    tagIds: parseNumberListParam(params, 'tagIds'),
+    categoryIds: parseNumberListParam(params, 'categoryIds'),
+    searchValue: query,
+    keyword: query.trim(),
+  };
+}
+
 const MediaBrowse: React.FC = () => {
   const access = useAccess();
   const location = useLocation();
+  const browseSearchState = useMemo(() => parseBrowseSearchState(location.search), [location.search]);
+  const latestFetchIdRef = useRef(0);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -99,13 +124,13 @@ const MediaBrowse: React.FC = () => {
   const [pageSize] = useState(30);
   const [viewMode, setViewMode] = useState<string>('grid');
 
-  const [keyword, setKeyword] = useState('');
-  const [searchValue, setSearchValue] = useState('');
+  const [keyword, setKeyword] = useState(browseSearchState.keyword);
+  const [searchValue, setSearchValue] = useState(browseSearchState.searchValue);
   const [type, setType] = useState<string>('');
   const [sortBy, setSortBy] = useState('createdAt,desc');
-  const [selectedTags, setSelectedTags] = useState<number[]>([]);
-  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
-  const [selectedLibraryId, setSelectedLibraryId] = useState<number | null>(null);
+  const [selectedTags, setSelectedTags] = useState<number[]>(browseSearchState.tagIds);
+  const [selectedCategories, setSelectedCategories] = useState<number[]>(browseSearchState.categoryIds);
+  const [selectedLibraryId, setSelectedLibraryId] = useState<number | null>(browseSearchState.libraryId);
   const [minYear, setMinYear] = useState<number | undefined>();
   const [maxYear, setMaxYear] = useState<number | undefined>();
   const [minRating, setMinRating] = useState<number>(0);
@@ -117,33 +142,20 @@ const MediaBrowse: React.FC = () => {
   const [batchClassifyLoading, setBatchClassifyLoading] = useState(false);
   const [listPreviewItemId, setListPreviewItemId] = useState<number | null>(null);
   const [listPreviewVideoErrors, setListPreviewVideoErrors] = useState<Record<number, boolean>>({});
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const [allTags, setAllTags] = useState<TagOption[]>([]);
   const [categories, setCategories] = useState<FlatCategory[]>([]);
   const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const libParam = params.get('libraryId');
-    if (libParam) {
-      const libId = Number(libParam);
-      if (!Number.isNaN(libId)) {
-        setSelectedLibraryId(libId);
-      }
-    } else {
-      setSelectedLibraryId(null);
-    }
-    setSelectedTags(parseNumberListParam(params, 'tagIds'));
-    setSelectedCategories(parseNumberListParam(params, 'categoryIds'));
-    const qParam = params.get('q') ?? params.get('query');
-    if (qParam != null) {
-      setSearchValue(qParam);
-      setKeyword(qParam.trim());
-    } else {
-      setSearchValue('');
-      setKeyword('');
-    }
-  }, [location.search]);
+    setSelectedLibraryId(browseSearchState.libraryId);
+    setSelectedTags(browseSearchState.tagIds);
+    setSelectedCategories(browseSearchState.categoryIds);
+    setSearchValue(browseSearchState.searchValue);
+    setKeyword(browseSearchState.keyword);
+    setPage(1);
+  }, [browseSearchState]);
 
   useEffect(() => {
     getFilters()
@@ -162,6 +174,8 @@ const MediaBrowse: React.FC = () => {
 
   const fetchItems = useCallback(
     async (nextPage = page, nextPageSize = pageSize) => {
+      const fetchId = latestFetchIdRef.current + 1;
+      latestFetchIdRef.current = fetchId;
       setLoading(true);
       try {
         const trimmedKeyword = keyword.trim();
@@ -179,6 +193,9 @@ const MediaBrowse: React.FC = () => {
             size: nextPageSize,
           });
           if (res?.code === 200 && res?.data?.results) {
+            if (fetchId !== latestFetchIdRef.current) {
+              return;
+            }
             setItems(res.data.results.items || []);
             setTotal(res.data.results.total || 0);
           }
@@ -200,11 +217,16 @@ const MediaBrowse: React.FC = () => {
           sortOrder: sortOrder as 'asc' | 'desc',
         });
         if (res?.code === 200 && res?.data) {
+          if (fetchId !== latestFetchIdRef.current) {
+            return;
+          }
           setItems(res.data.items || []);
           setTotal(res.data.total || 0);
         }
       } finally {
-        setLoading(false);
+        if (fetchId === latestFetchIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [
@@ -416,13 +438,13 @@ const MediaBrowse: React.FC = () => {
         const previewVideoUrl = item.fileIds?.length ? getFileStreamUrl(item.fileIds[0]) : null;
         const isPreviewActive = listPreviewItemId === item.id;
         const showVideoPreview =
-          canPreview && isPreviewActive && !!previewVideoUrl && !listPreviewVideoErrors[item.id];
+          !autoplayDisabled && canPreview && isPreviewActive && !!previewVideoUrl && !listPreviewVideoErrors[item.id];
         return (
           <div
             key={item.id}
             className="media-list-item"
             onClick={() => history.push(`/media/${item.id}`)}
-            onMouseEnter={() => setListPreviewItemId(item.id)}
+            onMouseEnter={() => !autoplayDisabled && setListPreviewItemId(item.id)}
             onMouseLeave={() => setListPreviewItemId((current) => (current === item.id ? null : current))}
           >
             <div className="media-list-poster">

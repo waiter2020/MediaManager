@@ -307,7 +307,7 @@ public class SysConfigService {
         cfg.put("classifierEnabled", getBoolean("ai.classifier.enabled", true));
         cfg.put("timeoutMs", getInt("ai.timeout_ms", 600000));
         cfg.put("autoApproveEnabled", getBoolean("ai.auto_approve.enabled", false));
-        cfg.put("autoApproveConfidenceThreshold", getDouble("ai.auto_approve.confidence_threshold", 0.8));
+        cfg.put("autoApproveConfidenceThreshold", getDouble("ai.auto_approve.confidence_threshold", 0.5));
         putIfPresent(cfg, "autoApproveFields", getString("ai.auto_approve.fields", "tag:*,overview"));
         return cfg;
     }

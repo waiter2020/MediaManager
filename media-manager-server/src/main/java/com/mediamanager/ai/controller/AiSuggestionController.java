@@ -2,6 +2,7 @@ package com.mediamanager.ai.controller;
 
 import com.mediamanager.ai.service.AiSuggestionService;
 import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.common.response.PageResult;
 import com.mediamanager.common.security.SecurityCurrentUser;
 import com.mediamanager.system.entity.SysUser;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,8 +24,10 @@ public class AiSuggestionController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('media:edit_metadata')")
-    public ApiResponse<List<Map<String, Object>>> listPending() {
-        return ApiResponse.success(aiSuggestionService.listPending());
+    public ApiResponse<PageResult<Map<String, Object>>> listPending(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(aiSuggestionService.listPending(page, size));
     }
 
     @PostMapping("/{id}/approve")
@@ -49,6 +52,14 @@ public class AiSuggestionController {
         Integer reviewerId = securityCurrentUser.getCurrentUser().map(SysUser::getId).orElse(null);
         List<Integer> ids = body != null ? body.get("ids") : List.of();
         int count = aiSuggestionService.batchApprove(ids, reviewerId);
+        return ApiResponse.success(Map.of("approved", count));
+    }
+
+    @PostMapping("/approve-all")
+    @PreAuthorize("hasAuthority('media:edit_metadata')")
+    public ApiResponse<Map<String, Integer>> approveAll() {
+        Integer reviewerId = securityCurrentUser.getCurrentUser().map(SysUser::getId).orElse(null);
+        int count = aiSuggestionService.approveAllPending(reviewerId);
         return ApiResponse.success(Map.of("approved", count));
     }
 

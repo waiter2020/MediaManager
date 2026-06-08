@@ -3,6 +3,7 @@ import { history, useParams, useSearchParams } from '@umijs/max';
 import { ArrowLeftOutlined, CustomerServiceOutlined, PictureOutlined, VideoCameraOutlined } from '@ant-design/icons';
 import { Button, Result, Segmented, Select, Spin } from 'antd';
 import VideoPlayer from '@/components/VideoPlayer';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { getItemDetail } from '@/services/media';
 import {
   appendAuthToken,
@@ -106,6 +107,7 @@ const PlayerPage: React.FC = () => {
   const [playError, setPlayError] = useState<string | null>(null);
   const [transcodeSpeed, setTranscodeSpeed] = useState<TranscodeTelemetry | null>(null);
   const lastAudioReportRef = useRef(0);
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const numericId = Number(id);
   const startSec = Number(searchParams.get('t'));
@@ -377,7 +379,7 @@ const PlayerPage: React.FC = () => {
             <audio
               className="player-audio-control"
               controls
-              autoPlay
+              autoPlay={!autoplayDisabled}
               src={streamUrl}
               onTimeUpdate={(event) => {
                 const seconds = Math.floor(event.currentTarget.currentTime || 0);

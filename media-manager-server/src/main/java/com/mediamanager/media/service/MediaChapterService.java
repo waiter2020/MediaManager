@@ -21,6 +21,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -71,6 +72,22 @@ public class MediaChapterService {
                 .filter(file -> file.getVideoCodec() != null || looksLikeVideo(file.getContainer()))
                 .findFirst()
                 .ifPresent(this::ensureChaptersForFile);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean needsChaptersForFile(MediaFile file) {
+        if (file == null || file.getId() == null || !isVideoFile(file)) {
+            return false;
+        }
+        return !chapterRepository.existsByMediaFileId(file.getId());
+    }
+
+    @Async("postProcessExecutor")
+    public void ensureChaptersForFileAsync(Integer fileId) {
+        if (fileId == null) {
+            return;
+        }
+        fileRepository.findById(fileId).ifPresent(this::ensureChaptersForFile);
     }
 
     @Transactional(readOnly = true)
@@ -362,6 +379,12 @@ public class MediaChapterService {
         return "MOVIE".equals(item.getType()) || "TV_SHOW".equals(item.getType()) || "EPISODE".equals(item.getType());
     }
 
+    private static boolean isVideoFile(MediaFile file) {
+        return file.getVideoCodec() != null
+                || looksLikeVideo(file.getContainer())
+                || looksLikeVideo(fileExtension(file.getFileName()));
+    }
+
     private static boolean looksLikeVideo(String container) {
         if (container == null) {
             return false;
@@ -371,6 +394,14 @@ public class MediaChapterService {
                     "mpg", "mpeg", "mts", "ogv", "ts", "vob", "webm", "wmv" -> true;
             default -> false;
         };
+    }
+
+    private static String fileExtension(String fileName) {
+        if (fileName == null) {
+            return null;
+        }
+        int dotIndex = fileName.lastIndexOf('.');
+        return dotIndex >= 0 ? fileName.substring(dotIndex + 1) : null;
     }
 
     private static String chapterTitle(int index) {

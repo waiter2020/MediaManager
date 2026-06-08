@@ -9,13 +9,13 @@ spring:
 
   # Database
   datasource:
-    url: jdbc:sqlite:${MEDIA_MANAGER_DATA_DIR:./data}/mediamanager.db?journal_mode=WAL&busy_timeout=60000
-    driver-class-name: org.sqlite.JDBC
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:mediamanager}
+    username: ${POSTGRES_USER:mediamanager}
+    password: ${POSTGRES_PASSWORD:mediamanager}
+    driver-class-name: org.postgresql.Driver
     hikari:
-      # SQLite has a single writer. Keep one pooled connection so app-level writes queue
-      # through Hikari instead of competing for SQLite's file lock.
-      maximum-pool-size: 1
-      minimum-idle: 1
+      maximum-pool-size: 10
+      minimum-idle: 2
       connection-timeout: 60000
       connection-test-query: SELECT 1
 
@@ -25,7 +25,6 @@ spring:
       ddl-auto: none
     show-sql: false
     open-in-view: false
-    database-platform: org.hibernate.community.dialect.SQLiteDialect
     properties:
       hibernate:
         format_sql: true

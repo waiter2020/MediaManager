@@ -45,8 +45,8 @@ public interface ClassifierStrategy extends MediaManagerPlugin {
 
     /**
      * Database-only classifiers can run in a short transaction. Classifiers that
-     * call external services should opt out so they do not hold SQLite snapshots
-     * while waiting on network IO.
+     * call external services should opt out so they do not hold database
+     * transactions while waiting on network IO.
      */
     default boolean runsInTransaction() {
         return true;

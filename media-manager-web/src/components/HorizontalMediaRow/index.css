@@ -111,7 +111,7 @@
 
 @media (max-width: 640px) {
   .horizontal-media-row {
-    --row-item-width: 136px;
+    --row-item-width: clamp(152px, 42vw, 176px);
   }
 
   .horizontal-media-row .row-header {
@@ -135,6 +135,6 @@
 
 @media (max-width: 420px) {
   .horizontal-media-row {
-    --row-item-width: 124px;
+    --row-item-width: clamp(146px, 44vw, 164px);
   }
 }

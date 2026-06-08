@@ -11,6 +11,8 @@ public class MediaCollectionRuleDto {
     private String keyword;
     private List<Integer> categoryIds;
     private List<Integer> tagIds;
+    private String metadataField;
+    private String metadataValue;
     private Integer minYear;
     private Integer maxYear;
     private Double minRating;

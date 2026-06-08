@@ -32,7 +32,7 @@ public class FtsIndexService {
                 safe(item.getTitle()),
                 safe(item.getOriginalTitle()),
                 safe(item.getOverview()),
-                joinColumn("SELECT file_name FROM media_file WHERE media_item_id = ? AND deleted = 0", item.getId()),
+                joinColumn("SELECT file_name FROM media_file WHERE media_item_id = ? AND deleted = FALSE", item.getId()),
                 joinColumn("""
                         SELECT t.name
                         FROM tag t
@@ -66,8 +66,12 @@ public class FtsIndexService {
         }
         try {
             List<Integer> rawIds = jdbcTemplate.queryForList(
-                    "SELECT item_id FROM media_fts WHERE media_fts MATCH ? ORDER BY rank LIMIT ?",
+                    "SELECT item_id FROM media_fts "
+                            + "WHERE search_vector @@ to_tsquery('simple', ?) "
+                            + "ORDER BY ts_rank(search_vector, to_tsquery('simple', ?)) DESC "
+                            + "LIMIT ?",
                     Integer.class,
+                    ftsQuery,
                     ftsQuery,
                     Math.max(limit * 5, 50));
             if (rawIds.isEmpty()) {
@@ -106,17 +110,19 @@ public class FtsIndexService {
 
         try {
             String where = " FROM media_fts JOIN media_item m ON m.id = media_fts.item_id "
-                    + "WHERE media_fts MATCH ? "
-                    + "AND (m.hidden = 0 OR m.hidden IS NULL) "
+                    + "WHERE media_fts.search_vector @@ to_tsquery('simple', ?) "
+                    + "AND (m.hidden = FALSE OR m.hidden IS NULL) "
                     + "AND m.library_id IN (" + inClause + ")";
 
             Integer total = jdbcTemplate.queryForObject("SELECT COUNT(*)" + where, Integer.class, args.toArray());
 
             List<Object> pageArgs = new ArrayList<>(args);
+            pageArgs.add(ftsQuery);
             pageArgs.add(safeSize);
             pageArgs.add(offset);
             List<Integer> ids = jdbcTemplate.queryForList(
-                    "SELECT media_fts.item_id" + where + " ORDER BY rank LIMIT ? OFFSET ?",
+                    "SELECT media_fts.item_id" + where
+                            + " ORDER BY ts_rank(media_fts.search_vector, to_tsquery('simple', ?)) DESC LIMIT ? OFFSET ?",
                     Integer.class,
                     pageArgs.toArray());
             return new FtsPage(ids, total != null ? total : 0);
@@ -139,18 +145,25 @@ public class FtsIndexService {
     }
 
     public static String toFtsQuery(String query) {
+        if (query == null) {
+            return "";
+        }
         String trimmed = query.trim();
         if (trimmed.isEmpty()) {
             return "";
         }
-        String[] tokens = trimmed.split("\\s+");
+
+        String normalized = trimmed.replaceAll("[^\\p{IsAlphabetic}\\p{IsDigit}_\\s]+", " ");
+        String[] tokens = normalized.trim().split("\\s+");
         StringBuilder sb = new StringBuilder();
         for (String token : tokens) {
-            String escaped = token.replace("\"", "\"\"");
-            if (sb.length() > 0) {
-                sb.append(' ');
+            if (token.isBlank()) {
+                continue;
             }
-            sb.append('"').append(escaped).append('"').append('*');
+            if (sb.length() > 0) {
+                sb.append(" & ");
+            }
+            sb.append(token).append(":*");
         }
         return sb.toString();
     }

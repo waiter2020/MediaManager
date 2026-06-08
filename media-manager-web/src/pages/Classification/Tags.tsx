@@ -31,6 +31,7 @@ import {
   type AiOrganizationJobStatus,
   type AiOrganizationRequest,
   type AiOrganizationResponse,
+  type AiOrganizationSmartCollectionCandidate,
   type AiOrganizationTagUsage,
 } from '@/services/ai';
 import {
@@ -69,7 +70,7 @@ const TagsManagement: React.FC = () => {
   const [recolorManualTags, setRecolorManualTags] = useState(false);
   const [createSmartCollections, setCreateSmartCollections] = useState(true);
   const [lowUsageThreshold, setLowUsageThreshold] = useState(1);
-  const [maxCollections, setMaxCollections] = useState(5);
+  const [maxCollections, setMaxCollections] = useState(20);
   const [minCollectionTagUsage, setMinCollectionTagUsage] = useState(3);
   const [collectionItemLimit, setCollectionItemLimit] = useState(50);
   const [organizationPreview, setOrganizationPreview] = useState<AiOrganizationResponse | null>(null);
@@ -330,10 +331,23 @@ const TagsManagement: React.FC = () => {
 
   const collectionCandidateColumns = [
     {
-      title: '候选标签',
+      title: '维度',
+      dataIndex: 'dimensionLabel',
+      width: 110,
+      render: (_: unknown, record: AiOrganizationSmartCollectionCandidate) => (
+        <Tag color={record.color || undefined}>{record.dimensionLabel || record.dimension || '规则'}</Tag>
+      ),
+    },
+    {
+      title: '候选合集',
       dataIndex: 'name',
-      render: (_: unknown, record: AiOrganizationTagUsage) => (
-        <Tag color={record.color || undefined}>{record.name}</Tag>
+      render: (_: unknown, record: AiOrganizationSmartCollectionCandidate) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text strong>{record.name}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {record.displayValue || record.tagName || record.categoryName || record.value || '-'}
+          </Typography.Text>
+        </Space>
       ),
     },
     { title: '命中媒体', dataIndex: 'usageCount', width: 100 },
@@ -522,7 +536,7 @@ const TagsManagement: React.FC = () => {
             </Space>
             <Space>
               <span>合集数量</span>
-              <InputNumber min={1} max={20} value={maxCollections} onChange={(value) => setMaxCollections(value || 5)} />
+              <InputNumber min={1} max={50} value={maxCollections} onChange={(value) => setMaxCollections(value || 20)} />
             </Space>
             <Space>
               <span>最少命中</span>
@@ -668,8 +682,8 @@ const TagsManagement: React.FC = () => {
           <Typography.Title level={5} style={{ margin: 0 }}>
             智能合集候选
           </Typography.Title>
-          <Table<AiOrganizationTagUsage>
-            rowKey="id"
+          <Table<AiOrganizationSmartCollectionCandidate>
+            rowKey={(record) => record.key || record.name}
             size="small"
             loading={organizeLoading}
             pagination={false}

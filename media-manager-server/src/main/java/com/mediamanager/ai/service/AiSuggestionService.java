@@ -7,6 +7,7 @@ import com.mediamanager.classification.service.TagCanonicalizationService;
 import com.mediamanager.classification.service.TagQualityService;
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
+import com.mediamanager.common.response.PageResult;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.service.MediaPostProcessService;
@@ -16,21 +17,29 @@ import com.mediamanager.metadata.service.NfoExportService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 public class AiSuggestionService {
 
     private static final Logger log = LoggerFactory.getLogger(AiSuggestionService.class);
+    private static final int AI_SYSTEM_REVIEWER_ID = 0;
+    private static final int AUTO_APPROVE_PAGE_SIZE = 200;
+    private static final int APPROVE_ALL_PAGE_SIZE = 100;
 
     private final AiSuggestionRepository suggestionRepository;
     private final MediaItemRepository itemRepository;
@@ -65,24 +74,38 @@ public class AiSuggestionService {
 
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listPending() {
-        return suggestionRepository.findByReviewStatusOrderByCreatedAtDesc("PENDING").stream()
-                .filter(s -> {
-                    try {
-                        libraryAccessService.assertCanViewItem(s.getMediaItem());
-                        return s.getMediaItem() != null && !Boolean.TRUE.equals(s.getMediaItem().getHidden());
-                    } catch (BusinessException e) {
-                        return false;
-                    }
-                })
+        return listPending(1, 20).getItems();
+    }
+
+    @Transactional(readOnly = true)
+    public PageResult<Map<String, Object>> listPending(int page, int size) {
+        int safePage = Math.max(1, page);
+        int safeSize = Math.min(Math.max(1, size), 100);
+        Set<Integer> libraryIds = libraryAccessService.resolveLibraryFilter(null);
+        if (libraryIds.isEmpty()) {
+            return PageResult.of(List.of(), 0, safePage, safeSize);
+        }
+        Page<AiSuggestion> suggestionPage = suggestionRepository.findVisiblePendingPage(
+                "PENDING",
+                libraryIds,
+                PageRequest.of(safePage - 1, safeSize));
+        List<Map<String, Object>> items = suggestionPage.getContent().stream()
                 .map(this::toMap)
                 .collect(Collectors.toList());
+        return PageResult.of(items, suggestionPage.getTotalElements(), safePage, safeSize);
     }
 
     @Transactional
     public void approve(Integer id, Integer reviewerId) {
         AiSuggestion suggestion = suggestionRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
-        libraryAccessService.assertCanViewItem(suggestion.getMediaItem());
+        applySuggestion(suggestion, reviewerId, true);
+    }
+
+    private void applySuggestion(AiSuggestion suggestion, Integer reviewerId, boolean enforceAccess) {
+        if (enforceAccess) {
+            libraryAccessService.assertCanViewItem(suggestion.getMediaItem());
+        }
         MediaItem item = suggestion.getMediaItem();
         if (item == null || Boolean.TRUE.equals(item.getHidden())) {
             throw new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND);
@@ -174,6 +197,37 @@ public class AiSuggestionService {
     }
 
     @Transactional
+    public int approveAllPending(Integer reviewerId) {
+        Set<Integer> libraryIds = libraryAccessService.resolveLibraryFilter(null);
+        if (libraryIds.isEmpty()) {
+            return 0;
+        }
+        int approved = 0;
+        while (true) {
+            List<AiSuggestion> suggestions = suggestionRepository.findVisiblePendingBatch(
+                    "PENDING",
+                    libraryIds,
+                    PageRequest.of(0, APPROVE_ALL_PAGE_SIZE));
+            if (suggestions.isEmpty()) {
+                break;
+            }
+            int approvedBeforeBatch = approved;
+            for (AiSuggestion suggestion : suggestions) {
+                try {
+                    applySuggestion(suggestion, reviewerId, false);
+                    approved++;
+                } catch (BusinessException e) {
+                    // skip inaccessible or missing
+                }
+            }
+            if (approved == approvedBeforeBatch) {
+                break;
+            }
+        }
+        return approved;
+    }
+
+    @Transactional
     public int batchReject(List<Integer> ids, Integer reviewerId) {
         if (ids == null) {
             return 0;
@@ -191,9 +245,20 @@ public class AiSuggestionService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void createSuggestion(MediaItem item, String field, String value, String providerId, float confidence) {
+    public Integer createSuggestion(MediaItem item, String field, String value, String providerId, float confidence) {
+        return createSuggestion(item, field, value, providerId, confidence, true);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Integer createSuggestion(
+            MediaItem item,
+            String field,
+            String value,
+            String providerId,
+            float confidence,
+            boolean autoApproveImmediately) {
         if (item == null || item.getId() == null) {
-            return;
+            return null;
         }
         Integer itemId = item.getId();
         String normalizedField = field;
@@ -203,7 +268,7 @@ public class AiSuggestionService {
             String tagName = tagNameFrom(field, value);
             String normalizedTagName = tagCanonicalizationService.normalizeDisplayName(tagName);
             if (normalizedTagName.isBlank() || !tagQualityService.isAcceptableAiTag(normalizedTagName)) {
-                return;
+                return null;
             }
             // AI classification already resolves against the existing-tag map.
             // Defer database canonicalization until approval so generating a
@@ -212,11 +277,11 @@ public class AiSuggestionService {
             normalizedField = tagFieldName(normalizedValue);
             attachedItem = itemRepository.findByIdWithClassificationGraph(itemId).orElse(null);
             if (attachedItem == null || tagCanonicalizationService.itemHasEquivalentTag(attachedItem, normalizedValue)) {
-                return;
+                return null;
             }
             if (suggestionRepository.existsByMediaItem_IdAndFieldNameAndSuggestedValueAndReviewStatus(
                     itemId, normalizedField, normalizedValue, "PENDING")) {
-                return;
+                return null;
             }
         } else {
             attachedItem = itemRepository.getReferenceById(itemId);
@@ -233,28 +298,87 @@ public class AiSuggestionService {
         
         suggestion = suggestionRepository.save(suggestion);
 
-        if (shouldAutoApprove(normalizedField, confidence)) {
+        if (autoApproveImmediately && shouldAutoApprove(normalizedField, confidence)) {
             log.info("Auto-approving AI suggestion for item {} field {} with confidence {}",
                     attachedItem.getId(), normalizedField, confidence);
             try {
-                approve(suggestion.getId(), 0); // 0 representing AI System reviewer
+                approve(suggestion.getId(), AI_SYSTEM_REVIEWER_ID);
             } catch (Exception e) {
                 log.error("Failed to auto-approve AI suggestion {}: {}", suggestion.getId(), e.getMessage());
             }
         }
+        return suggestion.getId();
+    }
+
+    @Transactional
+    public int autoApprovePendingForItems(Collection<Integer> mediaItemIds) {
+        if (!isAutoApproveEnabled() || mediaItemIds == null || mediaItemIds.isEmpty()) {
+            return 0;
+        }
+        List<Integer> ids = mediaItemIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        return autoApproveEligibleSuggestions(
+                suggestionRepository.findByReviewStatusAndMediaItem_IdInOrderByIdAsc("PENDING", ids));
+    }
+
+    @Transactional
+    public int autoApprovePendingSuggestions() {
+        if (!isAutoApproveEnabled()) {
+            return 0;
+        }
+        int approved = 0;
+        int afterId = 0;
+        while (true) {
+            List<AiSuggestion> suggestions = suggestionRepository.findByReviewStatusAndIdGreaterThanOrderByIdAsc(
+                    "PENDING",
+                    afterId,
+                    PageRequest.of(0, AUTO_APPROVE_PAGE_SIZE));
+            if (suggestions.isEmpty()) {
+                break;
+            }
+            afterId = suggestions.getLast().getId();
+            approved += autoApproveEligibleSuggestions(suggestions);
+        }
+        return approved;
+    }
+
+    private int autoApproveEligibleSuggestions(List<AiSuggestion> suggestions) {
+        int approved = 0;
+        for (AiSuggestion suggestion : suggestions) {
+            float confidence = suggestion.getConfidence() != null ? suggestion.getConfidence() : 0f;
+            if (!shouldAutoApprove(suggestion.getFieldName(), confidence)) {
+                continue;
+            }
+            try {
+                applySuggestion(suggestion, AI_SYSTEM_REVIEWER_ID, false);
+                approved++;
+            } catch (Exception e) {
+                log.warn("Skipping AI auto-approval for suggestion {}: {}",
+                        suggestion.getId(), e.getMessage());
+            }
+        }
+        return approved;
+    }
+
+    private boolean isAutoApproveEnabled() {
+        return sysConfigService.getBoolean("ai.auto_approve.enabled", false);
     }
 
     private boolean shouldAutoApprove(String field, float confidence) {
         if (field == null || field.isBlank()) {
             return false;
         }
-        boolean enabled = sysConfigService.getBoolean("ai.auto_approve.enabled", false);
-        if (!enabled) {
+        if (!isAutoApproveEnabled()) {
             return false;
         }
 
-        double threshold = 0.8;
-        String thresholdStr = sysConfigService.getString("ai.auto_approve.confidence_threshold", "0.8");
+        double threshold = 0.5;
+        String thresholdStr = sysConfigService.getString("ai.auto_approve.confidence_threshold", "0.5");
         try {
             threshold = Double.parseDouble(thresholdStr);
         } catch (NumberFormatException e) {

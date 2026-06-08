@@ -4,6 +4,7 @@ import { Button } from 'antd';
 import { history } from '@umijs/max';
 import MediaCard, { type MediaCardPreviewMode } from '@/components/MediaCard';
 import { openPlayerWindow } from '@/utils/playerWindow';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import type { MediaItem } from '@/types/media';
 import './index.css';
 
@@ -30,6 +31,9 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [isPointerInside, setIsPointerInside] = useState(false);
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
+  const effectiveThumbnailPreviewMode = autoplayDisabled ? 'none' : thumbnailPreviewMode;
+  const shouldAutoCarousel = autoCarousel && !autoplayDisabled;
 
   const openItemPlayer = (item: MediaItem) => {
     const position = item.playbackPosition && item.playbackPosition > 30 ? item.playbackPosition : 0;
@@ -67,7 +71,7 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   }, [checkScroll, items]);
 
   useEffect(() => {
-    if (!autoCarousel || loading || items.length <= 1 || isPointerInside) return undefined;
+    if (!shouldAutoCarousel || loading || items.length <= 1 || isPointerInside) return undefined;
 
     const interval = window.setInterval(() => {
       const el = scrollRef.current;
@@ -86,7 +90,7 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
     }, 4200);
 
     return () => window.clearInterval(interval);
-  }, [autoCarousel, isPointerInside, items.length, loading]);
+  }, [isPointerInside, items.length, loading, shouldAutoCarousel]);
 
   const scroll = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
@@ -162,7 +166,7 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
                 watched={item.watched}
                 favorited={item.favorited}
                 watchlisted={item.watchlisted}
-                previewMode={thumbnailPreviewMode}
+                previewMode={effectiveThumbnailPreviewMode}
                 onClick={() => navigateItem(item)}
                 onPlay={item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type) ? () => openItemPlayer(item) : undefined}
               />

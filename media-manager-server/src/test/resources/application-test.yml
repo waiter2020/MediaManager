@@ -1,15 +1,12 @@
 spring:
   datasource:
-    url: jdbc:sqlite:file:target/test-mediamanager.db?mode=memory&cache=shared&busy_timeout=60000
-    driver-class-name: org.sqlite.JDBC
-    hikari:
-      maximum-pool-size: 1
-      minimum-idle: 1
-      connection-timeout: 60000
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:mediamanager}
+    username: ${POSTGRES_USER:mediamanager}
+    password: ${POSTGRES_PASSWORD:mediamanager}
+    driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
       ddl-auto: none
-    database-platform: org.hibernate.community.dialect.SQLiteDialect
   flyway:
     enabled: true
     locations: classpath:db/migration

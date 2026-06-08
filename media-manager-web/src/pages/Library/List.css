@@ -456,7 +456,9 @@
   }
 
   .library-card-actions {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .library-card-actions-spacer {
@@ -464,8 +466,8 @@
   }
 
   .library-card-actions .ant-btn {
-    flex: 1 1 calc(50% - 4px);
-    min-width: 0;
+    flex: 0 0 auto;
+    min-width: max-content;
   }
 }
 

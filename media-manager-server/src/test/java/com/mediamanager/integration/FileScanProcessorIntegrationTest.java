@@ -4,11 +4,13 @@ import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.service.FileScanProcessor;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
+import com.mediamanager.media.service.MediaChapterService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.nio.file.Files;
@@ -16,6 +18,9 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -23,6 +28,9 @@ class FileScanProcessorIntegrationTest extends IntegrationTestSupport {
 
     @Autowired
     private FileScanProcessor fileScanProcessor;
+
+    @MockBean
+    private MediaChapterService mediaChapterService;
 
     @TempDir
     private Path tempDir;
@@ -59,7 +67,37 @@ class FileScanProcessorIntegrationTest extends IntegrationTestSupport {
         assertThat(mediaItemRepository.findById(item.getId()).orElseThrow().getLastScannedAt()).isNotNull();
     }
 
+    @Test
+    void unchangedExistingVideoWithoutChaptersQueuesChapterExtraction() throws Exception {
+        MediaLibrary library = createLibrary("Chapter Backfill");
+        Path video = tempDir.resolve("unchanged-no-chapters.mkv");
+        Files.writeString(video, "video");
+        BasicFileAttributes attrs = Files.readAttributes(video, BasicFileAttributes.class);
+
+        MediaItem item = createItem(library, "Unchanged Without Chapters");
+        MediaFile file = MediaFile.builder()
+                .mediaItem(item)
+                .filePath(normalizePath(video))
+                .fileName(video.getFileName().toString())
+                .fileSize(attrs.size())
+                .fileModifiedAt(attrs.lastModifiedTime().toInstant())
+                .container("mkv")
+                .deleted(false)
+                .build();
+        mediaFileRepository.saveAndFlush(file);
+        when(mediaChapterService.needsChaptersForFile(sameFileId(file))).thenReturn(true);
+
+        FileScanProcessor.ScanResult result = fileScanProcessor.scanFile(library, video, attrs);
+
+        assertThat(result.outcome()).isEqualTo(FileScanProcessor.ScanOutcome.UNCHANGED);
+        verify(mediaChapterService).ensureChaptersForFileAsync(file.getId());
+    }
+
     private static String normalizePath(Path path) {
         return path.toAbsolutePath().toString().replace('\\', '/');
+    }
+
+    private static MediaFile sameFileId(MediaFile file) {
+        return argThat(candidate -> candidate != null && file.getId().equals(candidate.getId()));
     }
 }

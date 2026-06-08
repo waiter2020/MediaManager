@@ -25,6 +25,7 @@ import {
 } from '@/services/collection';
 import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
 import { openPlayerWindow } from '@/utils/playerWindow';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaItem } from '@/types/media';
 import './index.css';
@@ -52,6 +53,7 @@ const CollectionsPage: React.FC = () => {
   const [createLoading, setCreateLoading] = useState(false);
   const [previewCollectionId, setPreviewCollectionId] = useState<number | null>(null);
   const [previewVideoErrors, setPreviewVideoErrors] = useState<Record<number, boolean>>({});
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
   const [form] = Form.useForm<CollectionPayload>();
   const smartEnabled = Form.useWatch('smart', form);
 
@@ -205,7 +207,7 @@ const CollectionsPage: React.FC = () => {
         ? getFileStreamUrl(coverItem.fileIds[0])
         : null;
     const showVideoPreview =
-      previewCollectionId === collection.id && !!previewVideoUrl && !previewVideoErrors[collection.id];
+      !autoplayDisabled && previewCollectionId === collection.id && !!previewVideoUrl && !previewVideoErrors[collection.id];
     const selected = collection.id === activeId;
     return (
       <button
@@ -213,7 +215,7 @@ const CollectionsPage: React.FC = () => {
         type="button"
         className={`collection-tile${selected ? ' selected' : ''}`}
         onClick={() => loadDetail(collection.id)}
-        onMouseEnter={() => setPreviewCollectionId(collection.id)}
+        onMouseEnter={() => !autoplayDisabled && setPreviewCollectionId(collection.id)}
         onMouseLeave={() =>
           setPreviewCollectionId((current) => (current === collection.id ? null : current))
         }

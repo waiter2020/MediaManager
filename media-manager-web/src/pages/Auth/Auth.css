@@ -344,8 +344,9 @@
   }
 
   .auth-insight {
-    min-width: calc(50% - 5px);
+    min-width: max-content;
     flex: 1;
+    white-space: nowrap;
   }
 
   .auth-card {

@@ -53,9 +53,8 @@ public class AsyncConfig {
     }
 
     /**
-     * SQLite has a single writer. Keep AI maintenance jobs serialized so a tag
-     * cleanup and a library-wide AI classification cannot starve normal API
-     * traffic by competing for the only database connection.
+     * AI maintenance jobs are write-heavy and can run for a while. Keep them
+     * serialized so tag cleanup and library-wide classification stay predictable.
      */
     @Bean(name = "aiMaintenanceExecutor")
     public Executor aiMaintenanceExecutor() {

@@ -10,14 +10,14 @@ class FtsIndexServiceTest {
 
     @Test
     void toFtsQueryWrapsTokensWithPrefixMatch() {
-        assertEquals("\"inception\"*", FtsIndexService.toFtsQuery("inception"));
-        assertEquals("\"star\"* \"wars\"*", FtsIndexService.toFtsQuery("star wars"));
+        assertEquals("inception:*", FtsIndexService.toFtsQuery("inception"));
+        assertEquals("star:* & wars:*", FtsIndexService.toFtsQuery("star wars"));
     }
 
     @Test
     void toFtsQueryEscapesQuotes() {
         String q = FtsIndexService.toFtsQuery("say \"hello\"");
-        assertTrue(q.contains("\"\"hello\"\""));
+        assertEquals("say:* & hello:*", q);
     }
 
     @Test

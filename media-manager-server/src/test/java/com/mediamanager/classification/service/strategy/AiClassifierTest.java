@@ -22,6 +22,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -89,11 +90,11 @@ class AiClassifierTest {
                 .doesNotContain("Cover Art");
 
         verify(aiSuggestionService).createSuggestion(
-                eq(item), eq("tag:科幻"), eq("科幻"), eq("test-ai"), anyFloat());
+                eq(item), eq("tag:科幻"), eq("科幻"), eq("test-ai"), anyFloat(), anyBoolean());
         verify(aiSuggestionService).createSuggestion(
-                eq(item), eq("tag:太空探索"), eq("太空探索"), eq("test-ai"), anyFloat());
+                eq(item), eq("tag:太空探索"), eq("太空探索"), eq("test-ai"), anyFloat(), anyBoolean());
         verify(aiSuggestionService, never()).createSuggestion(
-                eq(image), anyString(), anyString(), anyString(), anyFloat());
+                eq(image), anyString(), anyString(), anyString(), anyFloat(), anyBoolean());
         verify(tagCanonicalizationService, never()).resolveCanonicalName(anyString());
     }
 }

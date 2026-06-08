@@ -259,7 +259,8 @@ canvas {
 
 .ant-page-header-heading-title,
 .ant-pro-page-container .ant-page-header-heading-title {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .ant-btn,
@@ -281,12 +282,25 @@ canvas {
   font-weight: 500;
   letter-spacing: 0;
   min-width: 0;
+  white-space: nowrap;
 }
 
 .ant-btn > span:not(.anticon) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ant-btn,
+.ant-tag,
+.ant-segmented-item-label,
+.ant-tabs-tab-btn,
+.ant-pagination-item,
+.ant-pagination-prev,
+.ant-pagination-next {
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
 }
 
 .ant-btn-primary {
@@ -500,7 +514,7 @@ canvas {
   }
 
   .media-grid {
-    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
   }
 
@@ -645,6 +659,19 @@ canvas {
     flex-wrap: wrap;
   }
 
+  .ant-space:not(.ant-space-vertical) > .ant-space-item {
+    min-width: fit-content;
+  }
+
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-input),
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-input-affix-wrapper),
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-select),
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-picker),
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-input-number),
+  .ant-space:not(.ant-space-vertical) > .ant-space-item:has(.ant-segmented) {
+    min-width: 0;
+  }
+
   .ant-page-header-heading {
     align-items: stretch;
     flex-direction: column;
@@ -656,7 +683,7 @@ canvas {
 
   .ant-page-header-heading-extra .ant-space-item,
   .ant-card-extra .ant-space-item {
-    min-width: 0;
+    min-width: fit-content;
   }
 
   .ant-page-header-heading-extra .ant-btn,
@@ -714,7 +741,6 @@ canvas {
   }
 
   .media-grid {
-    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
     gap: 10px;
   }
 

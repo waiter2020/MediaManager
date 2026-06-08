@@ -20,6 +20,8 @@ import {
   Switch,
   Tooltip,
   Empty,
+  Pagination,
+  Popconfirm,
 } from 'antd';
 import { Link, history, useAccess } from '@umijs/max';
 import {
@@ -37,6 +39,7 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import {
+  approveAllSuggestions,
   approveSuggestion,
   batchApproveSuggestions,
   batchRejectSuggestions,
@@ -415,6 +418,10 @@ const IntelligenceReview: React.FC = () => {
   const access = useAccess();
   const [data, setData] = useState<AiSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [approveAllLoading, setApproveAllLoading] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [layoutMode, setLayoutMode] = useState<'table' | 'card'>('card');
 
@@ -434,15 +441,32 @@ const IntelligenceReview: React.FC = () => {
 
   // Form states for auto config
   const [autoEnabled, setAutoEnabled] = useState(false);
-  const [autoThreshold, setAutoThreshold] = useState(80);
+  const [autoThreshold, setAutoThreshold] = useState(50);
   const [autoFields, setAutoFields] = useState<string[]>([]);
 
-  const load = async () => {
+  const load = async (targetPage = page, targetSize = pageSize) => {
     setLoading(true);
     try {
-      const res = await listAiSuggestions();
+      const res = await listAiSuggestions({ page: targetPage, size: targetSize });
       if (res.code === 200) {
-        setData(res.data || []);
+        const result = res.data;
+        const items = result?.items || [];
+        const nextTotal = result?.total || 0;
+        const nextPage = result?.page || targetPage;
+        const nextSize = result?.size || targetSize;
+        const totalPages = result?.totalPages || Math.max(1, Math.ceil(nextTotal / nextSize));
+
+        if (items.length === 0 && nextTotal > 0 && targetPage > totalPages) {
+          setPage(totalPages);
+          setPageSize(nextSize);
+          await load(totalPages, nextSize);
+          return;
+        }
+
+        setData(items);
+        setTotal(nextTotal);
+        setPage(nextPage);
+        setPageSize(nextSize);
       }
     } finally {
       setLoading(false);
@@ -457,7 +481,7 @@ const IntelligenceReview: React.FC = () => {
       if (res.code === 200 && res.data) {
         setAutoConfig(res.data);
         setAutoEnabled(res.data.autoApproveEnabled || false);
-        setAutoThreshold(Math.round((res.data.autoApproveConfidenceThreshold || 0.8) * 100));
+        setAutoThreshold(Math.round((res.data.autoApproveConfidenceThreshold || 0.5) * 100));
         
         const fieldsStr = res.data.autoApproveFields || '';
         if (fieldsStr === '*') {
@@ -479,12 +503,12 @@ const IntelligenceReview: React.FC = () => {
   }, []);
 
   const stats = useMemo(() => {
-    const total = data.length;
+    const currentPageTotal = data.length;
     const uniqueMedia = new Set(data.map((item) => item.mediaItemId)).size;
     const totalConfidence = data.reduce((sum, item) => sum + (item.confidence ?? 0), 0);
-    const avgConfidence = total > 0 ? totalConfidence / total : 0;
+    const avgConfidence = currentPageTotal > 0 ? totalConfidence / currentPageTotal : 0;
     return { total, uniqueMedia, avgConfidence };
-  }, [data]);
+  }, [data, total]);
 
   const suggestionsForMedia = useMemo(() => {
     if (currentMediaId === null) return [];
@@ -515,6 +539,29 @@ const IntelligenceReview: React.FC = () => {
       );
       setSelectedRowKeys([]);
       load();
+    }
+  };
+
+  const handlePageChange = (nextPage: number, nextSize?: number) => {
+    const resolvedSize = nextSize || pageSize;
+    setSelectedRowKeys([]);
+    setPage(nextPage);
+    setPageSize(resolvedSize);
+    load(nextPage, resolvedSize);
+  };
+
+  const handleApproveAllPending = async () => {
+    setApproveAllLoading(true);
+    try {
+      const res = await approveAllSuggestions();
+      if (res.code === 200) {
+        message.success(`已一键批准 ${res.data?.approved ?? 0} 条 AI 建议`);
+        setSelectedRowKeys([]);
+        setPage(1);
+        await load(1, pageSize);
+      }
+    } finally {
+      setApproveAllLoading(false);
     }
   };
 
@@ -1168,9 +1215,34 @@ const IntelligenceReview: React.FC = () => {
       {/* 3. LAYOUT CONTROLLER & CONTROLS */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ color: '#fff', fontSize: 14, fontWeight: 500 }}>
-          待审核条目表 ({data.length})
+          待审核条目表 ({total})
         </div>
         <Space size="middle">
+          <Popconfirm
+            title="一键通过全部待审核建议"
+            description="将按当前权限范围采纳全部待审核 AI 建议。"
+            okText="通过"
+            cancelText="取消"
+            onConfirm={handleApproveAllPending}
+            disabled={total === 0}
+          >
+            <Button
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              loading={approveAllLoading}
+              disabled={total === 0}
+              style={{
+                borderRadius: 20,
+                padding: '4px 18px',
+                fontWeight: 600,
+                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                borderColor: '#10b981',
+                boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)',
+              }}
+            >
+              一键通过
+            </Button>
+          </Popconfirm>
           <Segmented
             value={layoutMode}
             onChange={(val) => setLayoutMode(val as 'table' | 'card')}
@@ -1208,25 +1280,44 @@ const IntelligenceReview: React.FC = () => {
               selectedRowKeys,
               onChange: setSelectedRowKeys,
             }}
-            pagination={{ pageSize: 20, showSizeChanger: true }}
+            pagination={{
+              current: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              showTotal: (value) => `共 ${value} 条`,
+              onChange: handlePageChange,
+            }}
             style={{ background: 'transparent' }}
           />
         </Card>
       ) : (
-        <Row gutter={[16, 16]}>
-          {groupedData.map((group) => (
-            <Col xs={24} key={group.mediaItemId}>
-              <MediaCardItem
-                group={group}
-                onApproveAll={handleCardApproveAll}
-                onRejectAll={handleCardRejectAll}
-                onCompare={handleCardCompare}
-                selectedRowKeys={selectedRowKeys}
-                setSelectedRowKeys={setSelectedRowKeys}
-              />
-            </Col>
-          ))}
-        </Row>
+        <>
+          <Row gutter={[16, 16]}>
+            {groupedData.map((group) => (
+              <Col xs={24} key={group.mediaItemId}>
+                <MediaCardItem
+                  group={group}
+                  onApproveAll={handleCardApproveAll}
+                  onRejectAll={handleCardRejectAll}
+                  onCompare={handleCardCompare}
+                  selectedRowKeys={selectedRowKeys}
+                  setSelectedRowKeys={setSelectedRowKeys}
+                />
+              </Col>
+            ))}
+          </Row>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              showSizeChanger
+              showTotal={(value) => `共 ${value} 条`}
+              onChange={handlePageChange}
+            />
+          </div>
+        </>
       )}
 
       {/* 5. FLOATING BOTTOM BATCH ACTIONS TOOLBAR */}

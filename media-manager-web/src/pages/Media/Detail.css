@@ -715,6 +715,7 @@
 
   .detail-actions .ant-btn {
     flex: 1 1 130px;
+    min-width: max-content;
   }
 
   .detail-file-card .file-specs {

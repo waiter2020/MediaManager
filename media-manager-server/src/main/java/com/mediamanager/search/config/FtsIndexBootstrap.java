@@ -21,7 +21,7 @@ public class FtsIndexBootstrap implements ApplicationRunner {
         try {
             Integer ftsCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM media_fts", Integer.class);
             Integer itemCount = jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM media_item WHERE hidden = 0", Integer.class);
+                    "SELECT COUNT(*) FROM media_item WHERE hidden = FALSE", Integer.class);
             if (ftsCount != null && ftsCount == 0 && itemCount != null && itemCount > 0) {
                 int indexed = ftsIndexService.rebuildAll();
                 log.info("FTS index bootstrap completed: {} items", indexed);

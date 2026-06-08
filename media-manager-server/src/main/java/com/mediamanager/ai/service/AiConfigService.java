@@ -19,6 +19,7 @@ public class AiConfigService {
 
     private final SysConfigService sysConfigService;
     private final List<AiProvider> providers;
+    private final AiSuggestionService aiSuggestionService;
 
     public List<Map<String, Object>> listProviders() {
         return providers.stream()
@@ -60,7 +61,7 @@ public class AiConfigService {
                 .outboundAllowed(sysConfigService.getBoolean("ai.outbound_allowed", true))
                 .timeoutMs(sysConfigService.getInt("ai.timeout_ms", 600000))
                 .autoApproveEnabled(sysConfigService.getBoolean("ai.auto_approve.enabled", false))
-                .autoApproveConfidenceThreshold(sysConfigService.getDouble("ai.auto_approve.confidence_threshold", 0.8))
+                .autoApproveConfidenceThreshold(sysConfigService.getDouble("ai.auto_approve.confidence_threshold", 0.5))
                 .autoApproveFields(sysConfigService.getString("ai.auto_approve.fields", "tag:*,overview"))
                 .build();
     }
@@ -68,6 +69,9 @@ public class AiConfigService {
     @Transactional
     public AiConfigDto updateConfig(AiConfigUpdateRequest request) {
         Map<String, String> updates = new HashMap<>();
+        boolean previousAutoApproveEnabled = sysConfigService.getBoolean("ai.auto_approve.enabled", false);
+        double previousAutoApproveThreshold = sysConfigService.getDouble("ai.auto_approve.confidence_threshold", 0.5);
+        String previousAutoApproveFields = sysConfigService.getString("ai.auto_approve.fields", "tag:*,overview");
         String currentDefaultProvider = sysConfigService.getString("ai.default_provider", "ollama");
         String currentLlmProvider = sysConfigService.getString("ai.llm_provider", currentDefaultProvider);
         String currentEmbedProvider = sysConfigService.getString("ai.embed_provider", currentDefaultProvider);
@@ -146,7 +150,39 @@ public class AiConfigService {
             updates.put("ai.auto_approve.fields", request.getAutoApproveFields().trim());
         }
         sysConfigService.updateConfigs(updates, true);
-        return getConfig();
+        AiConfigDto updated = getConfig();
+        if (shouldBackfillAutoApprovedSuggestions(
+                request,
+                updated,
+                previousAutoApproveEnabled,
+                previousAutoApproveThreshold,
+                previousAutoApproveFields)) {
+            aiSuggestionService.autoApprovePendingSuggestions();
+        }
+        return updated;
+    }
+
+    private boolean shouldBackfillAutoApprovedSuggestions(
+            AiConfigUpdateRequest request,
+            AiConfigDto updated,
+            boolean previousEnabled,
+            double previousThreshold,
+            String previousFields) {
+        if (!Boolean.TRUE.equals(updated.getAutoApproveEnabled())) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(request.getAutoApproveEnabled()) && !previousEnabled) {
+            return true;
+        }
+        if (!previousEnabled) {
+            return false;
+        }
+        if (request.getAutoApproveConfidenceThreshold() != null
+                && Double.compare(request.getAutoApproveConfidenceThreshold(), previousThreshold) != 0) {
+            return true;
+        }
+        return request.getAutoApproveFields() != null
+                && !request.getAutoApproveFields().trim().equals(previousFields);
     }
 
     private static boolean usesOllama(String... providerIds) {

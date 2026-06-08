@@ -3,6 +3,7 @@ import Player from 'xgplayer';
 import HlsPlugin from 'xgplayer-hls';
 import 'xgplayer/dist/index.min.css';
 import { getAccessToken } from '@/utils/authSession';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { refreshStreamToken } from '@/services/stream';
 
 export interface VideoPlayerProps {
@@ -59,6 +60,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
+  const effectiveAutoplay = autoplay && !autoplayDisabled;
 
   useEffect(() => {
     const silentRefresh = async () => {
@@ -85,7 +88,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       el: containerRef.current,
       url: resolvePlaybackUrl(src),
       poster,
-      autoplay,
+      autoplay: effectiveAutoplay,
       fluid: !fill,
       width: '100%',
       height: fill ? '100%' : undefined,
@@ -179,7 +182,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       playerRef.current?.destroy();
       playerRef.current = null;
     };
-  }, [src, mode, poster, autoplay, fill, subtitles, startTime, onProgress, onError]);
+  }, [src, mode, poster, effectiveAutoplay, fill, subtitles, startTime, onProgress, onError]);
 
   return (
     <div

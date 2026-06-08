@@ -38,10 +38,11 @@ public class TagCanonicalizationService {
             return "";
         }
         String normalized = Normalizer.normalize(rawName, Normalizer.Form.NFKC)
+                .replaceAll("[\\p{Cf}\\p{Cc}]+", "")
                 .replaceAll("\\s+", " ")
                 .strip();
         normalized = normalized.replaceAll("^[#\\s]+", "").strip();
-        normalized = normalized.replaceAll("^[\\p{Punct}\\s]+|[\\p{Punct}\\s]+$", "").strip();
+        normalized = normalized.replaceAll("^[\\p{P}\\s]+|[\\p{P}\\s]+$", "").strip();
         if (normalized.length() > MAX_TAG_LENGTH) {
             normalized = normalized.substring(0, MAX_TAG_LENGTH).strip();
         }
@@ -202,8 +203,9 @@ public class TagCanonicalizationService {
             }
             Integer duplicateId = duplicate.getId();
             entityManager.createNativeQuery("""
-                    INSERT OR IGNORE INTO media_item_tag (media_item_id, tag_id)
+                    INSERT INTO media_item_tag (media_item_id, tag_id)
                     SELECT media_item_id, :canonicalId FROM media_item_tag WHERE tag_id = :duplicateId
+                    ON CONFLICT DO NOTHING
                     """)
                     .setParameter("canonicalId", canonical.getId())
                     .setParameter("duplicateId", duplicateId)
@@ -247,6 +249,25 @@ public class TagCanonicalizationService {
         register(map, "720p", "hd", "\u9ad8\u6e05");
         register(map, "h264", "h.264", "avc");
         register(map, "h265", "h.265", "hevc");
+        register(map, "buttspanking", "spanking", "\u6253\u5c41\u80a1", "\u62cd\u5c41\u80a1");
+        register(map, "restraint", "bondage", "bound", "\u6346\u7ed1", "\u7ed1\u7f1a", "\u675f\u7f1a", "\u62d8\u675f");
+        register(map, "interrogation", "\u62f7\u95ee", "\u62f7\u554f", "\u5ba1\u95ee", "\u5be9\u554f", "\u8baf\u95ee", "\u8a0a\u554f");
+        register(map, "criticism", "\u6279\u8bc4", "\u6279\u8a55", "\u6279\u5224", "\u6307\u8d23", "\u8d23\u5907");
+        register(map, "revenge", "\u62a5\u590d", "\u5831\u5fa9", "\u590d\u4ec7", "\u5fa9\u4ec7");
+        register(map, "reporting", "\u62a5\u9053", "\u5831\u9053", "\u62a5\u5bfc", "\u5831\u5c0e");
+        register(map, "alarmsystem", "\u62a5\u8b66\u7cfb\u7edf", "\u5831\u8b66\u7cfb\u7d71", "\u8b66\u62a5\u7cfb\u7edf", "\u8b66\u5831\u7cfb\u7d71",
+                "\u62a5\u8b66\u5668", "\u5831\u8b66\u5668", "\u8b66\u62a5\u5668", "\u8b66\u5831\u5668");
+        register(map, "latin", "\u62c9\u4e01", "\u62c9\u4e01\u88d4", "\u62c9\u7f8e");
+        register(map, "nurse", "\u62a4\u58eb", "\u8b77\u58eb", "\u62a4\u7406\u5e08", "\u8b77\u7406\u5e2b");
+        register(map, "massage", "\u6309\u6469", "\u63a8\u62ff");
+        register(map, "vibrator", "\u6309\u6469\u68d2", "\u9707\u52a8\u68d2", "\u9707\u52d5\u68d2");
+        register(map, "provocation", "\u6311\u8845", "\u6311\u62e8", "\u6311\u91c1");
+        register(map, "challenge", "\u6311\u6218", "\u6311\u6230");
+        register(map, "defecation", "\u6392\u4fbf", "\u5927\u4fbf", "\u5982\u5395", "\u5982\u5ec1");
+        register(map, "urination", "\u6392\u5c3f", "\u5c0f\u4fbf", "\u5c3f\u5c3f");
+        register(map, "excretion", "\u6392\u6cc4");
+        register(map, "fisting", "\u62f3\u4ea4");
+        register(map, "fingering", "\u6307\u4ea4");
         return Map.copyOf(map);
     }
 
@@ -309,6 +330,24 @@ public class TagCanonicalizationService {
         registerChinese(map, "talkshow", "\u8bbf\u8c08");
         registerChinese(map, "variety", "\u7efc\u827a");
         registerChinese(map, "standup", "\u8131\u53e3\u79c0");
+        registerChinese(map, "buttspanking", "\u6253\u5c41\u80a1");
+        registerChinese(map, "restraint", "\u6346\u7ed1");
+        registerChinese(map, "interrogation", "\u62f7\u95ee");
+        registerChinese(map, "criticism", "\u6279\u8bc4");
+        registerChinese(map, "revenge", "\u62a5\u590d");
+        registerChinese(map, "reporting", "\u62a5\u9053");
+        registerChinese(map, "alarmsystem", "\u62a5\u8b66\u7cfb\u7edf");
+        registerChinese(map, "latin", "\u62c9\u4e01");
+        registerChinese(map, "nurse", "\u62a4\u58eb");
+        registerChinese(map, "massage", "\u6309\u6469");
+        registerChinese(map, "vibrator", "\u6309\u6469\u68d2");
+        registerChinese(map, "provocation", "\u6311\u8845");
+        registerChinese(map, "challenge", "\u6311\u6218");
+        registerChinese(map, "defecation", "\u6392\u4fbf");
+        registerChinese(map, "urination", "\u6392\u5c3f");
+        registerChinese(map, "excretion", "\u6392\u6cc4");
+        registerChinese(map, "fisting", "\u62f3\u4ea4");
+        registerChinese(map, "fingering", "\u6307\u4ea4");
         return Map.copyOf(map);
     }
 
@@ -330,8 +369,31 @@ public class TagCanonicalizationService {
             return "";
         }
         String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC).toLowerCase(java.util.Locale.ROOT);
+        normalized = normalizeKnownChineseVariants(normalized);
         normalized = Normalizer.normalize(normalized, Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
         return normalized.replaceAll("[^\\p{L}\\p{N}]+", "");
+    }
+
+    private static String normalizeKnownChineseVariants(String value) {
+        return value
+                .replace('\u554f', '\u95ee')
+                .replace('\u8a0a', '\u8baf')
+                .replace('\u5be9', '\u5ba1')
+                .replace('\u5831', '\u62a5')
+                .replace('\u5c0e', '\u5bfc')
+                .replace('\u7d71', '\u7edf')
+                .replace('\u5fa9', '\u590d')
+                .replace('\u8a55', '\u8bc4')
+                .replace('\u8b77', '\u62a4')
+                .replace('\u5e2b', '\u5e08')
+                .replace('\u7d81', '\u7ed1')
+                .replace('\u7e1b', '\u7f1a')
+                .replace('\u7e69', '\u7ef3')
+                .replace('\u7d91', '\u6346')
+                .replace('\u6230', '\u6218')
+                .replace('\u91c1', '\u62e8')
+                .replace('\u5ec1', '\u5395')
+                .replace('\u52d5', '\u52a8');
     }
 
     private static String safe(String value) {

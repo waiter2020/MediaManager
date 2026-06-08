@@ -84,10 +84,11 @@ RUN if [ "$MIRROR_PROFILE" = "cn" ]; then \
         "https://${ALPINE_MIRROR_HOST}/alpine/v${ver}/community" \
         > /etc/apk/repositories; \
     fi && \
-    apk add --no-cache ffmpeg nginx && \
+    apk add --no-cache ffmpeg nginx postgresql su-exec curl && \
     ln -sf /dev/stdout /var/log/nginx/access.log && \
     ln -sf /dev/stderr /var/log/nginx/error.log && \
-    mkdir -p /run/nginx
+    mkdir -p /run/nginx /run/postgresql /app/data/postgres && \
+    chown -R postgres:postgres /app/data/postgres /run/postgresql
 
 ENV JAVA_OPTS="-Xmx1024m -Xms256m"
 

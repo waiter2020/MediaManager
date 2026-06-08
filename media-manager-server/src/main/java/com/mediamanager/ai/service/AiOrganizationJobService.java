@@ -25,6 +25,7 @@ public class AiOrganizationJobService {
     private final AiOrganizationService organizationService;
     private final AiOrganizationWorker worker;
     private final AiTagTranslationService tagTranslationService;
+    private final AiTagSemanticMergeService tagSemanticMergeService;
     private final Executor executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
@@ -35,10 +36,12 @@ public class AiOrganizationJobService {
             AiOrganizationService organizationService,
             AiOrganizationWorker worker,
             AiTagTranslationService tagTranslationService,
+            AiTagSemanticMergeService tagSemanticMergeService,
             @Qualifier("aiMaintenanceExecutor") Executor executor) {
         this.organizationService = organizationService;
         this.worker = worker;
         this.tagTranslationService = tagTranslationService;
+        this.tagSemanticMergeService = tagSemanticMergeService;
         this.executor = executor;
     }
 
@@ -195,6 +198,33 @@ public class AiOrganizationJobService {
                         yieldDatabase();
                     }
                 }
+
+                List<AiTagSemanticMergeService.SemanticMergeGroup> semanticGroups =
+                        tagSemanticMergeService.suggestGroups(request.getLibraryId(), worker.listTagSnapshots());
+                int semanticMergeTotal = semanticGroups.stream()
+                        .mapToInt(group -> group.duplicateIds().size())
+                        .sum();
+                stats.total += semanticMergeTotal;
+                publish(stats, "running", "semantic-merge", "\u6b63\u5728\u5408\u5e76AI\u8bc6\u522b\u7684\u540c\u4e49\u6807\u7b7e", null);
+                for (AiTagSemanticMergeService.SemanticMergeGroup group : semanticGroups) {
+                    for (Integer duplicateId : group.duplicateIds()) {
+                        if (shouldStop(stats)) {
+                            return;
+                        }
+                        try {
+                            if (worker.mergeTag(group.canonicalId(), duplicateId)) {
+                                stats.mergedTagCount++;
+                            }
+                        } catch (Exception e) {
+                            stats.failed++;
+                            log.warn("Failed to semantically merge tag {} into {}: {}",
+                                    duplicateId, group.canonicalId(), safeMessage(e));
+                        }
+                        stats.processed++;
+                        publish(stats, "running", "semantic-merge", "\u6b63\u5728\u5408\u5e76AI\u8bc6\u522b\u7684\u540c\u4e49\u6807\u7b7e", null);
+                        yieldDatabase();
+                    }
+                }
             }
 
             if (Boolean.TRUE.equals(request.getDeleteUnusedTags())
@@ -259,11 +289,11 @@ public class AiOrganizationJobService {
                     return;
                 }
                 publish(stats, "running", "collection-plan", "正在刷新智能合集候选", null);
-                List<AiOrganizationResponse.TagUsage> candidates =
+                List<AiOrganizationResponse.SmartCollectionCandidate> candidates =
                         organizationService.preview(request).getSmartCollectionCandidates();
                 stats.total += candidates.size();
                 publish(stats, "running", "collections", "正在创建智能合集", null);
-                for (AiOrganizationResponse.TagUsage candidate : candidates) {
+                for (AiOrganizationResponse.SmartCollectionCandidate candidate : candidates) {
                     if (shouldStop(stats)) {
                         return;
                     }
@@ -276,8 +306,8 @@ public class AiOrganizationJobService {
                         }
                     } catch (Exception e) {
                         stats.failed++;
-                        log.warn("Failed to create smart collection for tag {}: {}",
-                                candidate.getId(), safeMessage(e));
+                        log.warn("Failed to create smart collection for candidate {}: {}",
+                                candidate.getKey(), safeMessage(e));
                     }
                     stats.processed++;
                     publish(stats, "running", "collections", "正在创建智能合集", null);

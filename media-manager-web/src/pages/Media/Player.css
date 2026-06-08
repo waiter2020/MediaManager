@@ -272,7 +272,8 @@
 
 .player-audio-title {
   width: 100%;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
   color: #fff;
   font-size: 20px;
   font-weight: 650;

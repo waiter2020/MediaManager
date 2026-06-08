@@ -29,7 +29,7 @@ public class AiClassifier implements com.mediamanager.classification.spi.Classif
     private static final int DEFAULT_BATCH_SIZE = 100;
     private static final int MAX_EXISTING_TAGS_IN_PROMPT = 250;
     private static final int MAX_OVERVIEW_CHARS = 360;
-    private static final float SUGGESTION_CONFIDENCE = 0.75f;
+    private static final float SUGGESTION_CONFIDENCE = 0.85f;
 
     private final AiOrchestrator aiOrchestrator;
     private final AiSuggestionService aiSuggestionService;
@@ -121,9 +121,11 @@ public class AiClassifier implements com.mediamanager.classification.spi.Classif
                                 "tag:" + tagName,
                                 tagName,
                                 provider.providerId(),
-                                SUGGESTION_CONFIDENCE));
+                                SUGGESTION_CONFIDENCE,
+                                false));
             }
         }
+        aiSuggestionService.autoApprovePendingForItems(itemById.keySet());
     }
 
     @Override

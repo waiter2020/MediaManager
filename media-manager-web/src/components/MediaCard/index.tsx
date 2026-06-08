@@ -10,6 +10,7 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
+import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import './index.css';
 
@@ -77,6 +78,7 @@ const MediaCard: React.FC<MediaCardProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [previewVideoError, setPreviewVideoError] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const posterUrl = resolveItemPosterUrl({
     itemId: id,
@@ -88,8 +90,10 @@ const MediaCard: React.FC<MediaCardProps> = ({
   const previewVideoUrl = fileIds?.length ? getFileStreamUrl(fileIds[0]) : null;
   const year = releaseDate ? releaseDate.substring(0, 4) : null;
   const isVideo = PREVIEWABLE_TYPES.has(type || '');
+  const effectivePreviewMode = autoplayDisabled ? 'none' : previewMode;
   const showPlayIcon = isVideo || type === 'AUDIO';
-  const shouldShowPreview = isVideo && previewMode !== 'none' && (previewMode === 'always' || isHovered);
+  const shouldShowPreview =
+    isVideo && effectivePreviewMode !== 'none' && (effectivePreviewMode === 'always' || isHovered);
   const shouldShowVideoPreview = shouldShowPreview && !!previewVideoUrl && !previewVideoError;
   const progress = typeof playbackPercent === 'number' ? Math.max(0, Math.min(100, playbackPercent)) : 0;
   const showProgress = showPlayIcon && progress > 0 && progress < 95 && !watched;
@@ -126,14 +130,14 @@ const MediaCard: React.FC<MediaCardProps> = ({
     if (shouldShowVideoPreview) return;
 
     video.pause();
-    if (previewMode === 'hover') {
+    if (effectivePreviewMode === 'hover') {
       try {
         video.currentTime = 0;
       } catch {
         // Some browsers disallow seeking until metadata is available.
       }
     }
-  }, [previewMode, previewVideoUrl, shouldShowVideoPreview]);
+  }, [effectivePreviewMode, previewVideoUrl, shouldShowVideoPreview]);
 
   const handlePlayClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -171,7 +175,7 @@ const MediaCard: React.FC<MediaCardProps> = ({
           <video
             ref={previewVideoRef}
             src={previewVideoUrl || undefined}
-            className={`media-card-preview-video${previewMode === 'always' ? ' is-autoplay' : ''}`}
+            className={`media-card-preview-video${effectivePreviewMode === 'always' ? ' is-autoplay' : ''}`}
             muted
             playsInline
             preload="metadata"
