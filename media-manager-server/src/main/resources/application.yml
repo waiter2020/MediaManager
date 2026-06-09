@@ -75,7 +75,14 @@ mediamanager:
     path: ffmpeg
   hls:
     segment-duration: 6
+    playlist-wait-seconds-stream-copy: 10
+    playlist-wait-seconds-transcode: 90
+    segment-wait-seconds: 30
+    idle-stop-seconds: 120
+    idle-check-interval-ms: 30000
   playback:
+    hardware-acceleration: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION:auto}
+    hardware-device: ${MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE:/dev/dri/renderD128}
     hardware-encoder: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ENCODER:h264_nvenc}
   ai:
     default-provider: ${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}

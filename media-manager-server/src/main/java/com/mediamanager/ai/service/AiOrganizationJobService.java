@@ -3,6 +3,9 @@ package com.mediamanager.ai.service;
 import com.mediamanager.ai.dto.AiOrganizationJobStatus;
 import com.mediamanager.ai.dto.AiOrganizationRequest;
 import com.mediamanager.ai.dto.AiOrganizationResponse;
+import com.mediamanager.classification.service.MergeAggressiveness;
+import com.mediamanager.classification.service.TagMergeDiscoveryService;
+import com.mediamanager.classification.service.TagMergeSnapshot;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.core.context.SecurityContext;
@@ -25,7 +28,7 @@ public class AiOrganizationJobService {
     private final AiOrganizationService organizationService;
     private final AiOrganizationWorker worker;
     private final AiTagTranslationService tagTranslationService;
-    private final AiTagSemanticMergeService tagSemanticMergeService;
+    private final TagMergeDiscoveryService tagMergeDiscoveryService;
     private final Executor executor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
@@ -36,12 +39,12 @@ public class AiOrganizationJobService {
             AiOrganizationService organizationService,
             AiOrganizationWorker worker,
             AiTagTranslationService tagTranslationService,
-            AiTagSemanticMergeService tagSemanticMergeService,
+            TagMergeDiscoveryService tagMergeDiscoveryService,
             @Qualifier("aiMaintenanceExecutor") Executor executor) {
         this.organizationService = organizationService;
         this.worker = worker;
         this.tagTranslationService = tagTranslationService;
-        this.tagSemanticMergeService = tagSemanticMergeService;
+        this.tagMergeDiscoveryService = tagMergeDiscoveryService;
         this.executor = executor;
     }
 
@@ -173,58 +176,30 @@ public class AiOrganizationJobService {
             plan = organizationService.preview(request);
 
             if (Boolean.TRUE.equals(request.getMergeDuplicateTags())) {
-                int mergeTotal = plan.getDuplicateTagGroups().stream()
-                        .mapToInt(group -> group.getDuplicateTags().size())
-                        .sum();
-                stats.total += mergeTotal;
-                publish(stats, "running", "merge", "正在合并重复标签", null);
-                for (AiOrganizationResponse.DuplicateTagGroup group : plan.getDuplicateTagGroups()) {
-                    Integer canonicalId = group.getCanonicalTag() != null ? group.getCanonicalTag().getId() : null;
-                    for (AiOrganizationResponse.TagUsage duplicate : group.getDuplicateTags()) {
-                        if (shouldStop(stats)) {
-                            return;
-                        }
-                        try {
-                            if (worker.mergeTag(canonicalId, duplicate.getId())) {
-                                stats.mergedTagCount++;
-                            }
-                        } catch (Exception e) {
-                            stats.failed++;
-                            log.warn("Failed to merge tag {} into {}: {}",
-                                    duplicate.getId(), canonicalId, safeMessage(e));
-                        }
-                        stats.processed++;
-                        publish(stats, "running", "merge", "正在合并重复标签", null);
-                        yieldDatabase();
-                    }
-                }
+                MergeAggressiveness aggressiveness =
+                        MergeAggressiveness.from(request.getMergeAggressiveness());
+                List<TagMergeSnapshot> snapshots = toMergeSnapshots(worker.listTagSnapshots());
 
-                List<AiTagSemanticMergeService.SemanticMergeGroup> semanticGroups =
-                        tagSemanticMergeService.suggestGroups(request.getLibraryId(), worker.listTagSnapshots());
-                int semanticMergeTotal = semanticGroups.stream()
+                List<TagMergeDiscoveryService.DiscoveredMergeGroup> autoGroups =
+                        tagMergeDiscoveryService.autoMergeGroups(
+                                snapshots, aggressiveness, request.getLibraryId());
+                int autoMergeTotal = autoGroups.stream()
                         .mapToInt(group -> group.duplicateIds().size())
                         .sum();
-                stats.total += semanticMergeTotal;
+                stats.total += autoMergeTotal;
+                publish(stats, "running", "merge", "正在合并高置信重复标签", null);
+                applyMergeGroups(autoGroups, stats, "merge");
+
+                snapshots = toMergeSnapshots(worker.listTagSnapshots());
+                List<TagMergeDiscoveryService.DiscoveredMergeGroup> aiGroups =
+                        tagMergeDiscoveryService.discoverAiReviewGroups(
+                                snapshots, aggressiveness, request.getLibraryId());
+                int aiMergeTotal = aiGroups.stream()
+                        .mapToInt(group -> group.duplicateIds().size())
+                        .sum();
+                stats.total += aiMergeTotal;
                 publish(stats, "running", "semantic-merge", "\u6b63\u5728\u5408\u5e76AI\u8bc6\u522b\u7684\u540c\u4e49\u6807\u7b7e", null);
-                for (AiTagSemanticMergeService.SemanticMergeGroup group : semanticGroups) {
-                    for (Integer duplicateId : group.duplicateIds()) {
-                        if (shouldStop(stats)) {
-                            return;
-                        }
-                        try {
-                            if (worker.mergeTag(group.canonicalId(), duplicateId)) {
-                                stats.mergedTagCount++;
-                            }
-                        } catch (Exception e) {
-                            stats.failed++;
-                            log.warn("Failed to semantically merge tag {} into {}: {}",
-                                    duplicateId, group.canonicalId(), safeMessage(e));
-                        }
-                        stats.processed++;
-                        publish(stats, "running", "semantic-merge", "\u6b63\u5728\u5408\u5e76AI\u8bc6\u522b\u7684\u540c\u4e49\u6807\u7b7e", null);
-                        yieldDatabase();
-                    }
-                }
+                applyMergeGroups(aiGroups, stats, "semantic-merge");
             }
 
             if (Boolean.TRUE.equals(request.getDeleteUnusedTags())
@@ -283,86 +258,94 @@ public class AiOrganizationJobService {
                 }
             }
 
-            List<AiOrganizationResponse.GeneratedCollection> generatedCollections = new ArrayList<>();
             if (Boolean.TRUE.equals(request.getCreateSmartCollections())) {
                 if (shouldStop(stats)) {
                     return;
                 }
-                publish(stats, "running", "collection-plan", "正在刷新智能合集候选", null);
+                publish(stats, "running", "collections-plan", "正在生成智能合集", null);
                 List<AiOrganizationResponse.SmartCollectionCandidate> candidates =
                         organizationService.preview(request).getSmartCollectionCandidates();
                 stats.total += candidates.size();
                 publish(stats, "running", "collections", "正在创建智能合集", null);
+                List<AiOrganizationResponse.GeneratedCollection> generated = new ArrayList<>();
                 for (AiOrganizationResponse.SmartCollectionCandidate candidate : candidates) {
                     if (shouldStop(stats)) {
                         return;
                     }
                     try {
-                        AiOrganizationResponse.GeneratedCollection generated =
+                        AiOrganizationResponse.GeneratedCollection created =
                                 worker.createSmartCollection(request, candidate);
-                        generatedCollections.add(generated);
-                        if (Boolean.TRUE.equals(generated.getCreated())) {
+                        generated.add(created);
+                        if (Boolean.TRUE.equals(created.getCreated())) {
                             stats.createdCollectionCount++;
                         }
                     } catch (Exception e) {
                         stats.failed++;
-                        log.warn("Failed to create smart collection for candidate {}: {}",
-                                candidate.getKey(), safeMessage(e));
+                        log.warn("Failed to create smart collection {}: {}",
+                                candidate.getName(), safeMessage(e));
                     }
                     stats.processed++;
                     publish(stats, "running", "collections", "正在创建智能合集", null);
                     yieldDatabase();
                 }
-            }
-
-            if (shouldStop(stats)) {
+                plan = organizationService.previewAfterApply(request);
+                plan.setGeneratedCollections(generated);
+                publish(stats, "done", "done", "标签整理完成", plan);
                 return;
             }
-            publish(stats, "running", "finalize", "正在生成整理结果", null);
-            AiOrganizationResponse result = organizationService.previewAfterApply(request);
-            result.setMergedTagCount(stats.mergedTagCount);
-            result.setTranslatedTagCount(stats.translatedTagCount);
-            result.setDeletedCleanupTagCount(stats.deletedCleanupTagCount);
-            result.setDeletedUnusedTagCount(stats.deletedUnusedTagCount);
-            result.setRecoloredTagCount(stats.recoloredTagCount);
-            result.setCreatedCollectionCount(stats.createdCollectionCount);
-            result.setGeneratedCollections(List.copyOf(generatedCollections));
-            stats.finishedAt = System.currentTimeMillis();
-            publish(stats, "done", "done", "标签与合集整理完成", result);
-            log.info("AI organization completed processed={} failed={} merged={} translated={} deleted={} recolored={} collections={}",
-                    stats.processed,
-                    stats.failed,
-                    stats.mergedTagCount,
-                    stats.translatedTagCount,
-                    stats.deletedCleanupTagCount,
-                    stats.recoloredTagCount,
-                    stats.createdCollectionCount);
+
+            plan = organizationService.previewAfterApply(request);
+            publish(stats, "done", "done", "标签整理完成", plan);
         } catch (Exception e) {
-            stats.failed++;
-            stats.finishedAt = System.currentTimeMillis();
-            publish(stats, "failed", status.get().getPhase(), "整理失败: " + safeMessage(e), null);
             log.error("AI organization job failed", e);
+            publish(stats, "failed", stats.phase, "标签整理失败: " + safeMessage(e), null);
         } finally {
             running.set(false);
+            cancelRequested.set(false);
             SecurityContextHolder.clearContext();
         }
     }
 
-    private boolean shouldStop(RunStats stats) {
-        if (!cancelRequested.get()) {
-            return false;
+    private void applyMergeGroups(
+            List<TagMergeDiscoveryService.DiscoveredMergeGroup> groups,
+            RunStats stats,
+            String phase) {
+        for (TagMergeDiscoveryService.DiscoveredMergeGroup group : groups) {
+            for (Integer duplicateId : group.duplicateIds()) {
+                if (shouldStop(stats)) {
+                    return;
+                }
+                try {
+                    if (worker.mergeTag(group.canonicalId(), duplicateId)) {
+                        stats.mergedTagCount++;
+                    }
+                } catch (Exception e) {
+                    stats.failed++;
+                    log.warn("Failed to merge tag {} into {}: {}",
+                            duplicateId, group.canonicalId(), safeMessage(e));
+                }
+                stats.processed++;
+                publish(stats, "running", phase, "正在合并重复标签", null);
+                yieldDatabase();
+            }
         }
-        stats.finishedAt = System.currentTimeMillis();
-        publish(stats, "cancelled", "cancelled", "整理任务已取消，已完成的修改会保留", null);
-        return true;
     }
 
-    private void publish(
-            RunStats stats,
-            String state,
-            String phase,
-            String message,
-            AiOrganizationResponse result) {
+    private List<TagMergeSnapshot> toMergeSnapshots(List<AiOrganizationWorker.TagSnapshot> snapshots) {
+        return snapshots.stream()
+                .map(snapshot -> new TagMergeSnapshot(snapshot.id(), snapshot.name(), 0L, null))
+                .toList();
+    }
+
+    private boolean shouldStop(RunStats stats) {
+        if (cancelRequested.get()) {
+            publish(stats, "cancelled", stats.phase, "标签整理已取消", null);
+            return true;
+        }
+        return false;
+    }
+
+    private void publish(RunStats stats, String state, String phase, String message, AiOrganizationResponse result) {
         status.set(AiOrganizationJobStatus.builder()
                 .state(state)
                 .phase(phase)
@@ -378,7 +361,9 @@ public class AiOrganizationJobService {
                 .createdCollectionCount(stats.createdCollectionCount)
                 .cancelRequested(cancelRequested.get())
                 .startedAt(stats.startedAt)
-                .finishedAt(stats.finishedAt)
+                .finishedAt("done".equals(state) || "failed".equals(state) || "cancelled".equals(state)
+                        ? System.currentTimeMillis()
+                        : null)
                 .message(message)
                 .result(result)
                 .build());
@@ -389,19 +374,17 @@ public class AiOrganizationJobService {
             Thread.sleep(DATABASE_YIELD_MILLIS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            cancelRequested.set(true);
         }
     }
 
     private String safeMessage(Exception e) {
-        return e.getMessage() != null && !e.getMessage().isBlank()
-                ? e.getMessage()
-                : e.getClass().getSimpleName();
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     private static final class RunStats {
         private final Integer libraryId;
         private final long startedAt;
+        private String phase = "preview";
         private int total;
         private int processed;
         private int failed;
@@ -411,7 +394,6 @@ public class AiOrganizationJobService {
         private int deletedUnusedTagCount;
         private int recoloredTagCount;
         private int createdCollectionCount;
-        private Long finishedAt;
 
         private RunStats(Integer libraryId, long startedAt) {
             this.libraryId = libraryId;

@@ -7,6 +7,7 @@ import com.mediamanager.system.dto.AppearanceSettingsUpdateRequest;
 import com.mediamanager.system.dto.GeneralSettingsDto;
 import com.mediamanager.system.dto.IntegrationsSettingsDto;
 import com.mediamanager.system.dto.IntegrationsSettingsUpdateRequest;
+import com.mediamanager.streaming.dto.HardwareAccelerationType;
 import com.mediamanager.system.dto.MediaProcessingSettingsDto;
 import com.mediamanager.system.dto.MediaProcessingSettingsUpdateRequest;
 import com.mediamanager.system.dto.SecuritySettingsDto;
@@ -49,6 +50,15 @@ public class SysConfigService {
 
     @Value("${mediamanager.ffprobe.path:ffprobe}")
     private String yamlFfprobePath;
+
+    @Value("${mediamanager.playback.hardware-acceleration:auto}")
+    private String yamlHardwareAcceleration;
+
+    @Value("${mediamanager.playback.hardware-device:/dev/dri/renderD128}")
+    private String yamlHardwareDevice;
+
+    @Value("${mediamanager.playback.hardware-encoder:h264_nvenc}")
+    private String yamlHardwareEncoder;
 
     @Value("${mediamanager.ai.ollama.base-url:http://localhost:11434}")
     private String yamlOllamaBaseUrl;
@@ -180,6 +190,9 @@ public class SysConfigService {
         return MediaProcessingSettingsDto.builder()
                 .ffmpegPath(ffmpegPath(yamlFfmpegPath))
                 .ffprobePath(ffprobePath(yamlFfprobePath))
+                .hardwareAcceleration(getString("playback.hardware_acceleration", yamlHardwareAcceleration))
+                .hardwareDevice(getString("playback.hardware_device", yamlHardwareDevice))
+                .hardwareEncoder(getString("playback.hardware_encoder", yamlHardwareEncoder))
                 .build();
     }
 
@@ -198,6 +211,24 @@ public class SysConfigService {
                 throw new BusinessException(ErrorCode.VALIDATION_ERROR.getCode(), "ffprobePath must not be empty");
             }
             updateSingle("ffprobe.path", path);
+        }
+        if (request.getHardwareAcceleration() != null) {
+            String type = request.getHardwareAcceleration().trim().toLowerCase(Locale.ROOT);
+            if (type.isEmpty()) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR.getCode(), "hardwareAcceleration must not be empty");
+            }
+            HardwareAccelerationType.from(type);
+            updateSingle("playback.hardware_acceleration", type);
+        }
+        if (request.getHardwareDevice() != null) {
+            String device = request.getHardwareDevice().trim();
+            if (device.isEmpty()) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR.getCode(), "hardwareDevice must not be empty");
+            }
+            updateSingle("playback.hardware_device", device);
+        }
+        if (request.getHardwareEncoder() != null) {
+            updateSingle("playback.hardware_encoder", request.getHardwareEncoder().trim());
         }
         return getMediaProcessingSettings();
     }

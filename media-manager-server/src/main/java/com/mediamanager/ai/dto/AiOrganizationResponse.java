@@ -17,6 +17,7 @@ public class AiOrganizationResponse {
     private Integer unusedTagCount;
     private Integer cleanupTagCount;
     private Integer duplicateGroupCount;
+    private Integer semanticMergeGroupCount;
     private Integer smartCollectionCandidateCount;
     private Integer deletedUnusedTagCount;
     private Integer deletedCleanupTagCount;
@@ -27,6 +28,7 @@ public class AiOrganizationResponse {
     private List<TagUsage> unusedTags;
     private List<TagUsage> cleanupTags;
     private List<DuplicateTagGroup> duplicateTagGroups;
+    private List<SemanticMergeGroup> semanticMergeGroups;
     private List<SmartCollectionCandidate> smartCollectionCandidates;
     private List<GeneratedCollection> generatedCollections;
 
@@ -49,6 +51,18 @@ public class AiOrganizationResponse {
     @AllArgsConstructor
     public static class DuplicateTagGroup {
         private String semanticKey;
+        private TagUsage canonicalTag;
+        private List<TagUsage> duplicateTags;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SemanticMergeGroup {
+        private String source;
+        private Double confidence;
+        private String reason;
         private TagUsage canonicalTag;
         private List<TagUsage> duplicateTags;
     }

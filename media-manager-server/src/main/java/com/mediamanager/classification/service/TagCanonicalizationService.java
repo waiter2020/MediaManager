@@ -5,8 +5,8 @@ import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.media.entity.MediaItem;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,24 +14,31 @@ import org.springframework.transaction.annotation.Transactional;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import java.util.Optional;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TagCanonicalizationService {
 
     private static final int MAX_TAG_LENGTH = 64;
-    private static final Map<String, String> SYNONYM_KEYS = buildSynonymKeys();
-    private static final Map<String, String> CHINESE_NAMES_BY_KEY = buildChineseNamesByKey();
 
     private final TagRepository tagRepository;
+    private final TagSimilarityService tagSimilarityService;
+    private final TagEmbeddingClusterService tagEmbeddingClusterService;
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    public TagCanonicalizationService(
+            TagRepository tagRepository,
+            @Lazy TagSimilarityService tagSimilarityService,
+            @Lazy TagEmbeddingClusterService tagEmbeddingClusterService) {
+        this.tagRepository = tagRepository;
+        this.tagSimilarityService = tagSimilarityService;
+        this.tagEmbeddingClusterService = tagEmbeddingClusterService;
+    }
 
     public String normalizeDisplayName(String rawName) {
         if (rawName == null) {
@@ -54,20 +61,11 @@ public class TagCanonicalizationService {
         if (displayName.isBlank()) {
             return "";
         }
-        String key = rawSemanticKey(displayName);
-        return SYNONYM_KEYS.getOrDefault(key, key);
+        return rawSemanticKey(displayName);
     }
 
     public Optional<String> translateToChinese(String rawName) {
-        String displayName = normalizeDisplayName(rawName);
-        if (displayName.isBlank()) {
-            return Optional.empty();
-        }
-        String translated = CHINESE_NAMES_BY_KEY.get(semanticKey(displayName));
-        if (translated == null || translated.isBlank() || translated.equals(displayName)) {
-            return Optional.empty();
-        }
-        return Optional.of(translated);
+        return Optional.empty();
     }
 
     public boolean isPreferredChineseName(String rawName) {
@@ -75,45 +73,78 @@ public class TagCanonicalizationService {
         if (displayName.isBlank()) {
             return false;
         }
-        String translated = CHINESE_NAMES_BY_KEY.get(semanticKey(displayName));
-        return translated == null || translated.equals(displayName);
+        String lower = displayName.toLowerCase(Locale.ROOT);
+        return lower.equals(normalizeKnownChineseVariants(lower));
     }
 
     @Transactional(readOnly = true)
     public Optional<Tag> findEquivalentTag(String rawName) {
+        return findEquivalentTag(rawName, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<Tag> findEquivalentTag(String rawName, Integer libraryId) {
         String key = semanticKey(rawName);
         if (key.isBlank()) {
             return Optional.empty();
         }
         List<Tag> matches = matchingTags(key);
-        if (matches.isEmpty()) {
-            return Optional.empty();
+        if (!matches.isEmpty()) {
+            return Optional.of(chooseCanonical(matches, normalizeDisplayName(rawName)));
         }
-        return Optional.of(chooseCanonical(matches, normalizeDisplayName(rawName)));
+
+        List<TagMergeSnapshot> snapshots = allTagSnapshots();
+        Optional<TagMergeSnapshot> structural = tagSimilarityService.findStructuralMatch(
+                rawName, snapshots, MergeAggressiveness.AGGRESSIVE);
+        if (structural.isPresent()) {
+            return tagRepository.findById(structural.get().id());
+        }
+
+        Optional<TagEmbeddingClusterService.NeighborMatch> neighbor =
+                tagEmbeddingClusterService.findNearestNeighbor(rawName, snapshots, libraryId);
+        if (neighbor.isPresent()) {
+            return tagRepository.findById(neighbor.get().tagId());
+        }
+        return Optional.empty();
     }
 
     @Transactional
     public Optional<Tag> findCanonicalExisting(String rawName) {
+        return findCanonicalExisting(rawName, null);
+    }
+
+    @Transactional
+    public Optional<Tag> findCanonicalExisting(String rawName, Integer libraryId) {
         String key = semanticKey(rawName);
         if (key.isBlank()) {
             return Optional.empty();
         }
         List<Tag> matches = matchingTags(key);
-        if (matches.isEmpty()) {
-            return Optional.empty();
+        if (!matches.isEmpty()) {
+            Tag canonical = chooseCanonical(matches, normalizeDisplayName(rawName));
+            mergeDuplicates(canonical, matches);
+            return Optional.of(canonical);
         }
-        Tag canonical = chooseCanonical(matches, normalizeDisplayName(rawName));
-        mergeDuplicates(canonical, matches);
-        return Optional.of(canonical);
+
+        Optional<Tag> equivalent = findEquivalentTag(rawName, libraryId);
+        if (equivalent.isPresent()) {
+            return equivalent;
+        }
+        return Optional.empty();
     }
 
     @Transactional
     public Optional<Tag> findOrCreateTag(String rawName, String source, String color) {
+        return findOrCreateTag(rawName, source, color, null);
+    }
+
+    @Transactional
+    public Optional<Tag> findOrCreateTag(String rawName, String source, String color, Integer libraryId) {
         String displayName = normalizeDisplayName(rawName);
         if (displayName.isBlank()) {
             return Optional.empty();
         }
-        Optional<Tag> existing = findCanonicalExisting(displayName);
+        Optional<Tag> existing = findCanonicalExisting(displayName, libraryId);
         if (existing.isPresent()) {
             return existing;
         }
@@ -126,17 +157,22 @@ public class TagCanonicalizationService {
             return Optional.of(tagRepository.saveAndFlush(created));
         } catch (DataIntegrityViolationException e) {
             log.debug("Tag '{}' was created concurrently; resolving existing canonical tag", displayName);
-            return findCanonicalExisting(displayName);
+            return findCanonicalExisting(displayName, libraryId);
         }
     }
 
     @Transactional
     public Optional<String> resolveCanonicalName(String rawName) {
+        return resolveCanonicalName(rawName, null);
+    }
+
+    @Transactional
+    public Optional<String> resolveCanonicalName(String rawName, Integer libraryId) {
         String displayName = normalizeDisplayName(rawName);
         if (displayName.isBlank()) {
             return Optional.empty();
         }
-        return findCanonicalExisting(displayName)
+        return findCanonicalExisting(displayName, libraryId)
                 .map(Tag::getName)
                 .or(() -> Optional.of(displayName));
     }
@@ -170,6 +206,16 @@ public class TagCanonicalizationService {
             changed = true;
         }
         return changed;
+    }
+
+    private List<TagMergeSnapshot> allTagSnapshots() {
+        List<TagMergeSnapshot> snapshots = new ArrayList<>();
+        for (Tag tag : tagRepository.findAll()) {
+            if (tag != null && tag.getId() != null) {
+                snapshots.add(new TagMergeSnapshot(tag.getId(), tag.getName(), 0L, tag.getSource()));
+            }
+        }
+        return snapshots;
     }
 
     private List<Tag> matchingTags(String semanticKey) {
@@ -220,161 +266,17 @@ public class TagCanonicalizationService {
         entityManager.flush();
     }
 
-    private static Map<String, String> buildSynonymKeys() {
-        Map<String, String> map = new HashMap<>();
-        register(map, "sciencefiction", "sci-fi", "scifi", "sci fi", "\u79d1\u5e7b", "\u79d1\u5e7b\u7247");
-        register(map, "action", "\u52a8\u4f5c", "\u52a8\u4f5c\u7247");
-        register(map, "comedy", "\u559c\u5267", "\u559c\u5267\u7247");
-        register(map, "drama", "\u5267\u60c5", "\u5267\u60c5\u7247");
-        register(map, "romance", "romantic", "\u7231\u60c5", "\u7231\u60c5\u7247");
-        register(map, "horror", "\u6050\u6016", "\u6050\u6016\u7247");
-        register(map, "thriller", "\u60ca\u609a", "\u60ca\u609a\u7247");
-        register(map, "mystery", "suspense", "\u60ac\u7591", "\u63a8\u7406");
-        register(map, "documentary", "doc", "\u7eaa\u5f55", "\u7eaa\u5f55\u7247");
-        register(map, "animation", "anime", "animated", "\u52a8\u753b", "\u52a8\u6f2b", "\u52a8\u753b\u7247");
-        register(map, "fantasy", "\u5947\u5e7b", "\u9b54\u5e7b");
-        register(map, "adventure", "\u5192\u9669");
-        register(map, "crime", "\u72af\u7f6a");
-        register(map, "war", "\u6218\u4e89");
-        register(map, "history", "historical", "\u5386\u53f2");
-        register(map, "music", "musical", "\u97f3\u4e50", "\u6b4c\u821e");
-        register(map, "sports", "sport", "\u4f53\u80b2", "\u8fd0\u52a8");
-        register(map, "biography", "biopic", "\u4f20\u8bb0");
-        register(map, "western", "\u897f\u90e8");
-        register(map, "family", "\u5bb6\u5ead");
-        register(map, "children", "childrens", "kids", "\u513f\u7ae5");
-        register(map, "short", "\u77ed\u7247");
-        register(map, "4k", "uhd", "ultrahd", "ultra hd", "ultra high definition", "\u8d85\u9ad8\u6e05");
-        register(map, "1080p", "fullhd", "full hd", "fhd", "\u5168\u9ad8\u6e05");
-        register(map, "720p", "hd", "\u9ad8\u6e05");
-        register(map, "h264", "h.264", "avc");
-        register(map, "h265", "h.265", "hevc");
-        register(map, "buttspanking", "spanking", "\u6253\u5c41\u80a1", "\u62cd\u5c41\u80a1");
-        register(map, "restraint", "bondage", "bound", "\u6346\u7ed1", "\u7ed1\u7f1a", "\u675f\u7f1a", "\u62d8\u675f");
-        register(map, "interrogation", "\u62f7\u95ee", "\u62f7\u554f", "\u5ba1\u95ee", "\u5be9\u554f", "\u8baf\u95ee", "\u8a0a\u554f");
-        register(map, "criticism", "\u6279\u8bc4", "\u6279\u8a55", "\u6279\u5224", "\u6307\u8d23", "\u8d23\u5907");
-        register(map, "revenge", "\u62a5\u590d", "\u5831\u5fa9", "\u590d\u4ec7", "\u5fa9\u4ec7");
-        register(map, "reporting", "\u62a5\u9053", "\u5831\u9053", "\u62a5\u5bfc", "\u5831\u5c0e");
-        register(map, "alarmsystem", "\u62a5\u8b66\u7cfb\u7edf", "\u5831\u8b66\u7cfb\u7d71", "\u8b66\u62a5\u7cfb\u7edf", "\u8b66\u5831\u7cfb\u7d71",
-                "\u62a5\u8b66\u5668", "\u5831\u8b66\u5668", "\u8b66\u62a5\u5668", "\u8b66\u5831\u5668");
-        register(map, "latin", "\u62c9\u4e01", "\u62c9\u4e01\u88d4", "\u62c9\u7f8e");
-        register(map, "nurse", "\u62a4\u58eb", "\u8b77\u58eb", "\u62a4\u7406\u5e08", "\u8b77\u7406\u5e2b");
-        register(map, "massage", "\u6309\u6469", "\u63a8\u62ff");
-        register(map, "vibrator", "\u6309\u6469\u68d2", "\u9707\u52a8\u68d2", "\u9707\u52d5\u68d2");
-        register(map, "provocation", "\u6311\u8845", "\u6311\u62e8", "\u6311\u91c1");
-        register(map, "challenge", "\u6311\u6218", "\u6311\u6230");
-        register(map, "defecation", "\u6392\u4fbf", "\u5927\u4fbf", "\u5982\u5395", "\u5982\u5ec1");
-        register(map, "urination", "\u6392\u5c3f", "\u5c0f\u4fbf", "\u5c3f\u5c3f");
-        register(map, "excretion", "\u6392\u6cc4");
-        register(map, "fisting", "\u62f3\u4ea4");
-        register(map, "fingering", "\u6307\u4ea4");
-        return Map.copyOf(map);
-    }
-
-    private static Map<String, String> buildChineseNamesByKey() {
-        Map<String, String> map = new HashMap<>();
-        registerChinese(map, "sciencefiction", "\u79d1\u5e7b");
-        registerChinese(map, "action", "\u52a8\u4f5c");
-        registerChinese(map, "comedy", "\u559c\u5267");
-        registerChinese(map, "drama", "\u5267\u60c5");
-        registerChinese(map, "romance", "\u7231\u60c5");
-        registerChinese(map, "horror", "\u6050\u6016");
-        registerChinese(map, "thriller", "\u60ca\u609a");
-        registerChinese(map, "mystery", "\u60ac\u7591");
-        registerChinese(map, "documentary", "\u7eaa\u5f55\u7247");
-        registerChinese(map, "animation", "\u52a8\u753b");
-        registerChinese(map, "fantasy", "\u5947\u5e7b");
-        registerChinese(map, "adventure", "\u5192\u9669");
-        registerChinese(map, "crime", "\u72af\u7f6a");
-        registerChinese(map, "war", "\u6218\u4e89");
-        registerChinese(map, "history", "\u5386\u53f2");
-        registerChinese(map, "music", "\u97f3\u4e50");
-        registerChinese(map, "sports", "\u4f53\u80b2");
-        registerChinese(map, "biography", "\u4f20\u8bb0");
-        registerChinese(map, "western", "\u897f\u90e8");
-        registerChinese(map, "family", "\u5bb6\u5ead");
-        registerChinese(map, "children", "\u513f\u7ae5");
-        registerChinese(map, "short", "\u77ed\u7247");
-        registerChinese(map, "4k", "\u8d85\u9ad8\u6e05");
-        registerChinese(map, "1080p", "\u5168\u9ad8\u6e05");
-        registerChinese(map, "720p", "\u9ad8\u6e05");
-        registerChinese(map, "adult", "\u6210\u4eba");
-        registerChinese(map, "japanese", "\u65e5\u672c");
-        registerChinese(map, "korean", "\u97e9\u56fd");
-        registerChinese(map, "chinese", "\u4e2d\u56fd");
-        registerChinese(map, "american", "\u7f8e\u56fd");
-        registerChinese(map, "british", "\u82f1\u56fd");
-        registerChinese(map, "independent", "\u72ec\u7acb");
-        registerChinese(map, "classic", "\u7ecf\u5178");
-        registerChinese(map, "cult", "\u90aa\u5178");
-        registerChinese(map, "noir", "\u9ed1\u8272\u7535\u5f71");
-        registerChinese(map, "superhero", "\u8d85\u7ea7\u82f1\u96c4");
-        registerChinese(map, "disaster", "\u707e\u96be");
-        registerChinese(map, "roadmovie", "\u516c\u8def\u7247");
-        registerChinese(map, "comingofage", "\u6210\u957f");
-        registerChinese(map, "sliceoflife", "\u65e5\u5e38");
-        registerChinese(map, "psychological", "\u5fc3\u7406");
-        registerChinese(map, "political", "\u653f\u6cbb");
-        registerChinese(map, "period", "\u5e74\u4ee3");
-        registerChinese(map, "martialarts", "\u6b66\u4fa0");
-        registerChinese(map, "wuxia", "\u6b66\u4fa0");
-        registerChinese(map, "kungfu", "\u529f\u592b");
-        registerChinese(map, "food", "\u7f8e\u98df");
-        registerChinese(map, "travel", "\u65c5\u884c");
-        registerChinese(map, "education", "\u6559\u80b2");
-        registerChinese(map, "technology", "\u79d1\u6280");
-        registerChinese(map, "nature", "\u81ea\u7136");
-        registerChinese(map, "wildlife", "\u91ce\u751f\u52a8\u7269");
-        registerChinese(map, "concert", "\u6f14\u5531\u4f1a");
-        registerChinese(map, "reality", "\u771f\u4eba\u79c0");
-        registerChinese(map, "talkshow", "\u8bbf\u8c08");
-        registerChinese(map, "variety", "\u7efc\u827a");
-        registerChinese(map, "standup", "\u8131\u53e3\u79c0");
-        registerChinese(map, "buttspanking", "\u6253\u5c41\u80a1");
-        registerChinese(map, "restraint", "\u6346\u7ed1");
-        registerChinese(map, "interrogation", "\u62f7\u95ee");
-        registerChinese(map, "criticism", "\u6279\u8bc4");
-        registerChinese(map, "revenge", "\u62a5\u590d");
-        registerChinese(map, "reporting", "\u62a5\u9053");
-        registerChinese(map, "alarmsystem", "\u62a5\u8b66\u7cfb\u7edf");
-        registerChinese(map, "latin", "\u62c9\u4e01");
-        registerChinese(map, "nurse", "\u62a4\u58eb");
-        registerChinese(map, "massage", "\u6309\u6469");
-        registerChinese(map, "vibrator", "\u6309\u6469\u68d2");
-        registerChinese(map, "provocation", "\u6311\u8845");
-        registerChinese(map, "challenge", "\u6311\u6218");
-        registerChinese(map, "defecation", "\u6392\u4fbf");
-        registerChinese(map, "urination", "\u6392\u5c3f");
-        registerChinese(map, "excretion", "\u6392\u6cc4");
-        registerChinese(map, "fisting", "\u62f3\u4ea4");
-        registerChinese(map, "fingering", "\u6307\u4ea4");
-        return Map.copyOf(map);
-    }
-
-    private static void registerChinese(Map<String, String> map, String key, String chineseName) {
-        String semantic = SYNONYM_KEYS.getOrDefault(rawSemanticKey(key), rawSemanticKey(key));
-        map.put(semantic, chineseName);
-    }
-
-    private static void register(Map<String, String> map, String canonical, String... aliases) {
-        String canonicalKey = rawSemanticKey(canonical);
-        map.put(canonicalKey, canonicalKey);
-        for (String alias : aliases) {
-            map.put(rawSemanticKey(alias), canonicalKey);
-        }
-    }
-
-    private static String rawSemanticKey(String value) {
+    static String rawSemanticKey(String value) {
         if (value == null) {
             return "";
         }
-        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC).toLowerCase(java.util.Locale.ROOT);
+        String normalized = Normalizer.normalize(value, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
         normalized = normalizeKnownChineseVariants(normalized);
         normalized = Normalizer.normalize(normalized, Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
         return normalized.replaceAll("[^\\p{L}\\p{N}]+", "");
     }
 
-    private static String normalizeKnownChineseVariants(String value) {
+    static String normalizeKnownChineseVariants(String value) {
         return value
                 .replace('\u554f', '\u95ee')
                 .replace('\u8a0a', '\u8baf')

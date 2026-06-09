@@ -23,6 +23,10 @@ interface Capabilities {
   isNoopProvider?: boolean;
   aiDegraded?: boolean;
   aiDegradedReason?: string;
+  hardwareAccelerationConfigured?: string;
+  hardwareAccelerationResolved?: string;
+  hardwareEncoderAvailable?: boolean;
+  hardwareAccelerationWarnings?: string[];
 }
 
 const SystemCapabilitiesCard: React.FC = () => {
@@ -60,6 +64,12 @@ const SystemCapabilitiesCard: React.FC = () => {
             {caps.ffmpegAvailable ? '可用' : '不可用'}
           </Tag>
           {caps.ffmpegPath && <span style={{ marginLeft: 8 }}>{caps.ffmpegPath}</span>}
+        </Descriptions.Item>
+        <Descriptions.Item label="硬件加速">
+          <Tag color={caps.hardwareEncoderAvailable ? 'success' : 'default'}>
+            {caps.hardwareAccelerationResolved || caps.hardwareAccelerationConfigured || 'auto'}
+            {caps.hardwareEncoderAvailable ? '（可用）' : '（软编码回退）'}
+          </Tag>
         </Descriptions.Item>
         <Descriptions.Item label="向量提供方">
           {caps.embedProviderName || caps.aiProviderName || caps.embedProvider || caps.aiProvider || '-'}

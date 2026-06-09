@@ -29,6 +29,8 @@ export interface PlaybackInfo {
   width?: number;
   height?: number;
   bitrate?: number;
+  startOffset?: number;
+  durationSeconds?: number;
   qualities?: PlaybackOption[];
   transcodeModes?: PlaybackOption[];
   transcodingReasons?: string[];
@@ -47,11 +49,19 @@ export async function getPlaybackInfo(
     mode?: PlaybackModePreference;
     quality?: PlaybackQuality | string;
     transcodeMode?: TranscodeMode | string;
+    start?: number;
   },
 ) {
   return request<ApiResponse<PlaybackInfo>>(`/api/v1/stream/${fileId}/playback`, {
     method: 'GET',
     params,
+    timeout: 120000,
+  });
+}
+
+export async function stopTranscode(fileId: number) {
+  return request<ApiResponse<void>>(`/api/v1/stream/${fileId}/transcode/stop`, {
+    method: 'POST',
   });
 }
 

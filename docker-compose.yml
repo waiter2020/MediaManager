@@ -42,6 +42,26 @@ services:
       - ./media:/media:ro # Optional: mount local media folder read-only
       - ./data:/app/data  # PostgreSQL data + cache (thumbnails / HLS segments)
       - ${HOST_MEDIA_PATH:-./media}:/home/media:ro
+    # --- GPU hardware acceleration (optional; uncomment one block) ---
+    # NVIDIA NVENC:
+    # environment:
+    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=nvenc
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu, video]
+    # Intel/AMD VA-API or QSV:
+    # environment:
+    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=vaapi
+    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE=/dev/dri/renderD128
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - video
+    #   - render
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost/api/v1/system/status"]

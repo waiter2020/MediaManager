@@ -5,7 +5,9 @@ import com.mediamanager.ai.AiTaskType;
 import com.mediamanager.ai.spi.AiProvider;
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.classification.service.TagCanonicalizationService;
+import com.mediamanager.classification.service.TagEmbeddingClusterService;
 import com.mediamanager.classification.service.TagQualityService;
+import com.mediamanager.classification.service.TagSimilarityService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,6 +22,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,7 +42,10 @@ class AiTagTranslationServiceTest {
     void setUp() {
         service = new AiTagTranslationService(
                 aiOrchestrator,
-                new TagCanonicalizationService(tagRepository),
+                new TagCanonicalizationService(
+                        tagRepository,
+                        mock(TagSimilarityService.class),
+                        mock(TagEmbeddingClusterService.class)),
                 new TagQualityService(),
                 new ObjectMapper());
     }
@@ -57,7 +63,7 @@ class AiTagTranslationServiceTest {
 
         assertThat(candidates)
                 .extracting(AiOrganizationWorker.TagSnapshot::id)
-                .containsExactly(1);
+                .containsExactly(1, 5);
     }
 
     @Test

@@ -4,6 +4,8 @@ import com.mediamanager.ai.AiTaskType;
 import com.mediamanager.ai.service.AiOrchestrator;
 import com.mediamanager.ai.service.EmbeddingIndexService;
 import com.mediamanager.ai.spi.AiProvider;
+import com.mediamanager.streaming.dto.HardwareAccelerationProbeDto;
+import com.mediamanager.streaming.service.HardwareAccelerationService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,7 @@ public class SystemCapabilitiesService {
     private final SysConfigService sysConfigService;
     private final AiOrchestrator aiOrchestrator;
     private final EmbeddingIndexService embeddingIndexService;
+    private final HardwareAccelerationService hardwareAccelerationService;
 
     @Value("${mediamanager.ffmpeg.path:ffmpeg}")
     private String yamlFfmpegPath;
@@ -81,6 +84,13 @@ public class SystemCapabilitiesService {
         } else if (!embeddingAvailable) {
             caps.put("aiDegradedReason", "嵌入服务不可达，语义搜索与相似推荐将受限");
         }
+
+        HardwareAccelerationProbeDto hwProbe = hardwareAccelerationService.probe();
+        caps.put("hardwareAccelerationConfigured", hwProbe.configuredType());
+        caps.put("hardwareAccelerationResolved", hwProbe.resolvedType());
+        caps.put("hardwareEncoderAvailable", hwProbe.resolvedEncoder() != null && !hwProbe.resolvedEncoder().isBlank());
+        caps.put("hardwareAccelerationWarnings", hwProbe.warnings());
+        caps.put("hardwareEncodersAvailable", hwProbe.encodersAvailable());
         return caps;
     }
 }

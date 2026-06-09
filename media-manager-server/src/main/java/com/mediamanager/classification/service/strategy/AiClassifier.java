@@ -7,8 +7,11 @@ import com.mediamanager.ai.service.AiOrchestrator;
 import com.mediamanager.ai.service.AiSuggestionService;
 import com.mediamanager.ai.spi.AiProvider;
 import com.mediamanager.classification.repository.TagRepository;
+import com.mediamanager.classification.service.MergeAggressiveness;
 import com.mediamanager.classification.service.TagCanonicalizationService;
+import com.mediamanager.classification.service.TagMergeSnapshot;
 import com.mediamanager.classification.service.TagQualityService;
+import com.mediamanager.classification.service.TagSimilarityService;
 import com.mediamanager.media.entity.MediaItem;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.core.annotation.Order;
@@ -36,6 +39,7 @@ public class AiClassifier implements com.mediamanager.classification.spi.Classif
     private final TagRepository tagRepository;
     private final TagCanonicalizationService tagCanonicalizationService;
     private final TagQualityService tagQualityService;
+    private final TagSimilarityService tagSimilarityService;
     private final ObjectMapper objectMapper;
 
     public AiClassifier(
@@ -44,12 +48,14 @@ public class AiClassifier implements com.mediamanager.classification.spi.Classif
             TagRepository tagRepository,
             TagCanonicalizationService tagCanonicalizationService,
             TagQualityService tagQualityService,
+            TagSimilarityService tagSimilarityService,
             ObjectMapper objectMapper) {
         this.aiOrchestrator = aiOrchestrator;
         this.aiSuggestionService = aiSuggestionService;
         this.tagRepository = tagRepository;
         this.tagCanonicalizationService = tagCanonicalizationService;
         this.tagQualityService = tagQualityService;
+        this.tagSimilarityService = tagSimilarityService;
         this.objectMapper = objectMapper;
     }
 
@@ -220,13 +226,30 @@ public class AiClassifier implements com.mediamanager.classification.spi.Classif
         if (existingTagsByKey.containsKey(key)) {
             return Optional.of(existingTagsByKey.get(key));
         }
+        List<TagMergeSnapshot> snapshots = existingTagSnapshots();
+        Optional<TagMergeSnapshot> structural = tagSimilarityService.findStructuralMatch(
+                displayName, snapshots, MergeAggressiveness.AGGRESSIVE);
+        if (structural.isPresent()) {
+            return Optional.of(structural.get().name());
+        }
         if (!allowNewTags && !existingTagsByKey.isEmpty()) {
             return Optional.empty();
         }
-        // The existing-tag map already contains canonical semantic keys for the
-        // complete tag table. Defer database creation/canonicalization of a
-        // genuinely new tag until its suggestion is approved.
         return Optional.of(displayName);
+    }
+
+    private List<TagMergeSnapshot> existingTagSnapshots() {
+        List<TagMergeSnapshot> snapshots = new ArrayList<>();
+        tagRepository.findGlobalUsageCounts().forEach(row -> {
+            if (row.getTagId() != null && row.getTagName() != null && !row.getTagName().isBlank()) {
+                snapshots.add(new TagMergeSnapshot(
+                        row.getTagId(),
+                        row.getTagName(),
+                        row.getUsageCount(),
+                        row.getSource()));
+            }
+        });
+        return snapshots;
     }
 
     private Map<String, Object> promptItem(MediaItem item) {

@@ -31,6 +31,7 @@ import {
   type AiOrganizationJobStatus,
   type AiOrganizationRequest,
   type AiOrganizationResponse,
+  type AiOrganizationSemanticMergeGroup,
   type AiOrganizationSmartCollectionCandidate,
   type AiOrganizationTagUsage,
 } from '@/services/ai';
@@ -52,6 +53,7 @@ import type { MediaLibrary } from '@/types/library';
 const TagsManagement: React.FC = () => {
   const access = useAccess();
   const actionRef = useRef<ActionType>();
+  const previewDebounceRef = useRef<number>();
   const lastOrganizationFinishedAtRef = useRef<number>();
   const [modalVisible, setModalVisible] = useState(false);
   const [editingTag, setEditingTag] = useState<TagItem | null>(null);
@@ -63,6 +65,8 @@ const TagsManagement: React.FC = () => {
   const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
   const [selectedLibraryId, setSelectedLibraryId] = useState<number | undefined>();
   const [mergeDuplicateTags, setMergeDuplicateTags] = useState(true);
+  const [mergeAggressiveness, setMergeAggressiveness] =
+    useState<AiOrganizationRequest['mergeAggressiveness']>('aggressive');
   const [deleteUnusedTags, setDeleteUnusedTags] = useState(true);
   const [deleteLowUsageTags, setDeleteLowUsageTags] = useState(true);
   const [protectManualTags, setProtectManualTags] = useState(true);
@@ -70,9 +74,10 @@ const TagsManagement: React.FC = () => {
   const [recolorManualTags, setRecolorManualTags] = useState(false);
   const [createSmartCollections, setCreateSmartCollections] = useState(true);
   const [lowUsageThreshold, setLowUsageThreshold] = useState(1);
-  const [maxCollections, setMaxCollections] = useState(20);
+  const [maxCollections, setMaxCollections] = useState(0);
   const [minCollectionTagUsage, setMinCollectionTagUsage] = useState(3);
-  const [collectionItemLimit, setCollectionItemLimit] = useState(50);
+  const [minTagCollectionUsage, setMinTagCollectionUsage] = useState(10);
+  const [collectionItemLimit, setCollectionItemLimit] = useState(0);
   const [organizationPreview, setOrganizationPreview] = useState<AiOrganizationResponse | null>(null);
   const [organizationStatus, setOrganizationStatus] = useState<AiOrganizationJobStatus | null>(null);
   const [classifyStatus, setClassifyStatus] = useState<LibraryClassifyStatus | null>(null);
@@ -82,6 +87,7 @@ const TagsManagement: React.FC = () => {
   ): AiOrganizationRequest => ({
     libraryId: selectedLibraryId,
     mergeDuplicateTags,
+    mergeAggressiveness,
     deleteUnusedTags,
     deleteLowUsageTags,
     protectManualTags,
@@ -91,6 +97,7 @@ const TagsManagement: React.FC = () => {
     lowUsageThreshold,
     maxCollections,
     minCollectionTagUsage,
+    minTagCollectionUsage,
     collectionItemLimit,
     ...overrides,
   });
@@ -101,6 +108,14 @@ const TagsManagement: React.FC = () => {
       setLibraries(res.data || []);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (previewDebounceRef.current) {
+        window.clearTimeout(previewDebounceRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!organizeOpen) {
@@ -155,9 +170,22 @@ const TagsManagement: React.FC = () => {
     }
   };
 
-  const openOrganizer = async () => {
+  const scheduleOrganizationPreview = (
+    overrides?: Partial<AiOrganizationRequest>,
+    delayMs = 300,
+  ) => {
+    if (previewDebounceRef.current) {
+      window.clearTimeout(previewDebounceRef.current);
+    }
+    previewDebounceRef.current = window.setTimeout(() => {
+      void loadOrganizationPreview(overrides);
+    }, delayMs);
+  };
+
+  const openOrganizer = () => {
     setOrganizeOpen(true);
-    await Promise.all([loadLibraries(), loadOrganizationPreview()]);
+    void loadLibraries();
+    void loadOrganizationPreview();
   };
 
   const handleApplyOrganization = async () => {
@@ -329,6 +357,53 @@ const TagsManagement: React.FC = () => {
     },
   ];
 
+  const semanticMergeColumns = [
+    {
+      title: '来源',
+      dataIndex: 'source',
+      width: 100,
+      render: (source: AiOrganizationSemanticMergeGroup['source']) => {
+        const labels: Record<string, string> = {
+          EXACT: '精确',
+          STRUCTURE: '结构',
+          EMBEDDING: '向量',
+          AI: 'AI',
+        };
+        return labels[source || ''] || source || '-';
+      },
+    },
+    {
+      title: '置信度',
+      dataIndex: 'confidence',
+      width: 90,
+      render: (confidence?: number) =>
+        confidence != null ? `${Math.round(confidence * 100)}%` : '-',
+    },
+    {
+      title: '保留标签',
+      dataIndex: 'canonicalTag',
+      render: (tag: AiOrganizationTagUsage) => <Tag color={tag?.color || undefined}>{tag?.name}</Tag>,
+    },
+    {
+      title: '将合并',
+      dataIndex: 'duplicateTags',
+      render: (tags: AiOrganizationTagUsage[]) => (
+        <Space wrap size={[4, 4]}>
+          {(tags || []).map((tag) => (
+            <Tag key={tag.id} color={tag.color || undefined}>
+              {tag.name}
+            </Tag>
+          ))}
+        </Space>
+      ),
+    },
+    {
+      title: '原因',
+      dataIndex: 'reason',
+      width: 140,
+    },
+  ];
+
   const collectionCandidateColumns = [
     {
       title: '维度',
@@ -491,12 +566,29 @@ const TagsManagement: React.FC = () => {
               options={libraries.map((library) => ({ label: library.name, value: library.id }))}
               onChange={(value) => {
                 setSelectedLibraryId(value);
-                loadOrganizationPreview({ libraryId: value });
+                scheduleOrganizationPreview({ libraryId: value });
               }}
             />
             <Space>
               <span>合并重复标签</span>
               <Switch checked={mergeDuplicateTags} onChange={setMergeDuplicateTags} />
+            </Space>
+            <Space>
+              <span>合并强度</span>
+              <Select
+                style={{ width: 120 }}
+                value={mergeAggressiveness}
+                disabled={!mergeDuplicateTags}
+                options={[
+                  { label: '保守', value: 'conservative' },
+                  { label: '标准', value: 'standard' },
+                  { label: '积极', value: 'aggressive' },
+                ]}
+                onChange={(value) => {
+                  setMergeAggressiveness(value);
+                  scheduleOrganizationPreview({ mergeAggressiveness: value });
+                }}
+              />
             </Space>
             <Space>
               <span>清理空闲/脏标签</span>
@@ -536,7 +628,12 @@ const TagsManagement: React.FC = () => {
             </Space>
             <Space>
               <span>合集数量</span>
-              <InputNumber min={1} max={50} value={maxCollections} onChange={(value) => setMaxCollections(value || 20)} />
+              <InputNumber
+                min={0}
+                value={maxCollections}
+                placeholder="无限制"
+                onChange={(value) => setMaxCollections(value ?? 0)}
+              />
             </Space>
             <Space>
               <span>最少命中</span>
@@ -548,12 +645,21 @@ const TagsManagement: React.FC = () => {
               />
             </Space>
             <Space>
-              <span>合集容量</span>
+              <span>标签最少命中</span>
               <InputNumber
                 min={1}
-                max={200}
+                max={1000}
+                value={minTagCollectionUsage}
+                onChange={(value) => setMinTagCollectionUsage(value || 10)}
+              />
+            </Space>
+            <Space>
+              <span>合集容量</span>
+              <InputNumber
+                min={0}
                 value={collectionItemLimit}
-                onChange={(value) => setCollectionItemLimit(value || 50)}
+                placeholder="无限制"
+                onChange={(value) => setCollectionItemLimit(value ?? 0)}
               />
             </Space>
           </Space>
@@ -636,8 +742,11 @@ const TagsManagement: React.FC = () => {
             <Descriptions.Item label="待清理标签">
               {organizationPreview?.cleanupTagCount ?? 0}
             </Descriptions.Item>
-            <Descriptions.Item label="重复分组">
+            <Descriptions.Item label="精确重复">
               {organizationPreview?.duplicateGroupCount ?? 0}
+            </Descriptions.Item>
+            <Descriptions.Item label="合并建议">
+              {organizationPreview?.semanticMergeGroupCount ?? 0}
             </Descriptions.Item>
             <Descriptions.Item label="合集候选">
               {organizationPreview?.smartCollectionCandidateCount ?? 0}
@@ -656,7 +765,7 @@ const TagsManagement: React.FC = () => {
           )}
 
           <Typography.Title level={5} style={{ margin: 0 }}>
-            重复标签
+            精确重复标签
           </Typography.Title>
           <Table<AiOrganizationDuplicateGroup>
             rowKey="semanticKey"
@@ -665,6 +774,26 @@ const TagsManagement: React.FC = () => {
             pagination={{ pageSize: 5 }}
             columns={duplicateColumns}
             dataSource={organizationPreview?.duplicateTagGroups || []}
+          />
+
+          <Typography.Title level={5} style={{ margin: 0 }}>
+            合并建议
+          </Typography.Title>
+          <Alert
+            type="info"
+            showIcon
+            message="预览仅展示精确重复与结构合并建议。向量与 AI 同义合并会在启动整理后于后台执行。"
+          />
+          <Table<AiOrganizationSemanticMergeGroup>
+            rowKey={(record) =>
+              `${record.source || 'merge'}-${record.canonicalTag?.id || 'canonical'}-${(record.duplicateTags || [])
+                .map((tag) => tag.id)
+                .join('-')}`}
+            size="small"
+            loading={organizeLoading}
+            pagination={{ pageSize: 5 }}
+            columns={semanticMergeColumns}
+            dataSource={organizationPreview?.semanticMergeGroups || []}
           />
 
           <Typography.Title level={5} style={{ margin: 0 }}>

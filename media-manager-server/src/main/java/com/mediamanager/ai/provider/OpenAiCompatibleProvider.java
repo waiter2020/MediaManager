@@ -94,6 +94,84 @@ public class OpenAiCompatibleProvider implements AiProvider {
     }
 
     @Override
+    public List<float[]> embedTexts(List<String> texts, Map<String, Object> config) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        if (texts.size() == 1) {
+            return List.of(embedText(texts.getFirst(), config));
+        }
+        String baseUrl = str(config, "baseUrl", "https://api.openai.com/v1");
+        String model = str(config, "embedModel", "text-embedding-3-small");
+        String apiKey = str(config, "apiKey", "");
+        long timeoutMs = longVal(config, "timeoutMs", AiHttpClientFactory.DEFAULT_TIMEOUT_MS);
+        RestTemplate requestClient = httpClientFactory.create(timeoutMs);
+        log.debug("OpenAI batch embed request: model={}, count={}, timeoutMs={}", model, texts.size(), timeoutMs);
+
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                HttpHeaders headers = authHeaders(apiKey);
+                Map<String, Object> body = Map.of("model", model, "input", texts);
+                String resp = requestClient.postForObject(
+                        baseUrl + "/embeddings", new HttpEntity<>(body, headers), String.class);
+                JsonNode root = objectMapper.readTree(resp);
+                JsonNode data = root.path("data");
+                if (!data.isArray() || data.isEmpty()) {
+                    return fallbackEmbedTexts(texts, config);
+                }
+                float[][] vectors = new float[texts.size()][];
+                for (JsonNode item : data) {
+                    int index = item.path("index").asInt(-1);
+                    if (index < 0 || index >= vectors.length) {
+                        continue;
+                    }
+                    JsonNode arr = item.path("embedding");
+                    if (!arr.isArray()) {
+                        continue;
+                    }
+                    float[] vec = new float[arr.size()];
+                    for (int i = 0; i < arr.size(); i++) {
+                        vec[i] = (float) arr.get(i).asDouble();
+                    }
+                    vectors[index] = vec;
+                }
+                List<float[]> results = new ArrayList<>(texts.size());
+                boolean missing = false;
+                for (float[] vector : vectors) {
+                    if (vector == null || vector.length == 0) {
+                        missing = true;
+                        break;
+                    }
+                    results.add(vector);
+                }
+                if (missing) {
+                    return fallbackEmbedTexts(texts, config);
+                }
+                return results;
+            } catch (Exception e) {
+                if (attempt < MAX_RETRIES) {
+                    long backoff = INITIAL_BACKOFF_MS * (1L << attempt);
+                    log.warn("OpenAI batch embed attempt {}/{} failed ({}), retrying in {}ms...",
+                            attempt + 1, MAX_RETRIES + 1, e.getMessage(), backoff);
+                    sleepQuietly(backoff);
+                } else {
+                    log.warn("OpenAI batch embed failed, falling back to single requests: {}", e.getMessage());
+                    return fallbackEmbedTexts(texts, config);
+                }
+            }
+        }
+        return fallbackEmbedTexts(texts, config);
+    }
+
+    private List<float[]> fallbackEmbedTexts(List<String> texts, Map<String, Object> config) {
+        List<float[]> results = new ArrayList<>(texts.size());
+        for (String text : texts) {
+            results.add(embedText(text, config));
+        }
+        return results;
+    }
+
+    @Override
     public Optional<String> completeMetadata(String prompt, Map<String, Object> config) {
         return chat(prompt, config);
     }

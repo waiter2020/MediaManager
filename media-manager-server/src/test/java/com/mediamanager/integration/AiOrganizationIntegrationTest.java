@@ -9,6 +9,7 @@ import com.mediamanager.classification.entity.Tag;
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.media.entity.MediaItem;
+import com.mediamanager.media.repository.MediaCollectionRepository;
 import com.mediamanager.metadata.entity.MovieMetadata;
 import com.mediamanager.metadata.repository.MovieMetadataRepository;
 import com.mediamanager.system.entity.SysUser;
@@ -24,11 +25,13 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -56,6 +59,9 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
     @Autowired
     private EntityManager entityManager;
 
+    @Autowired
+    private MediaCollectionRepository collectionRepository;
+
     private String adminToken;
 
     @BeforeEach
@@ -67,6 +73,7 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
         }
         libraryAccessRepository.deleteAll();
         mediaFileRepository.deleteAll();
+        collectionRepository.deleteAll();
         mediaItemRepository.deleteAll();
         libraryRepository.deleteAll();
         tagRepository.deleteAll();
@@ -107,7 +114,7 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
-    void organizationTranslatesKnownEnglishTagsToChinese() throws Exception {
+    void organizationKeepsEnglishTagsWhenAiProviderIsUnavailable() throws Exception {
         Tag englishTag = tagRepository.save(Tag.builder()
                 .name("Action")
                 .color("#8b5cf6")
@@ -131,9 +138,8 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
 
         AiOrganizationJobStatus completed = waitForCompletion();
         assertEquals("done", completed.getState());
-        assertEquals(1, completed.getTranslatedTagCount());
-        assertEquals("\u52a8\u4f5c", tagRepository.findById(englishTag.getId()).orElseThrow().getName());
-        assertTrue(tagRepository.findByName("Action").isEmpty());
+        assertEquals(0, completed.getTranslatedTagCount());
+        assertEquals("Action", tagRepository.findById(englishTag.getId()).orElseThrow().getName());
     }
 
     @Test
@@ -179,6 +185,35 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
         Tag mergedTag = tagRepository.findByName("\u62a5\u9053").orElseThrow();
         assertEquals(2L, mediaLinkCount(mergedTag.getId()));
         assertFalse(tagRepository.existsById(duplicateTag.getId()));
+    }
+
+    @Test
+    void previewIncludesStructuralSemanticMergeGroups() {
+        tagRepository.save(Tag.builder()
+                .name("\u9a91\u4e58")
+                .color("#2563eb")
+                .source("AI")
+                .build());
+        tagRepository.save(Tag.builder()
+                .name("\u9a91\u4e58\u4f4d")
+                .color("#e11d48")
+                .source("MANUAL")
+                .build());
+
+        AiOrganizationRequest request = new AiOrganizationRequest();
+        request.setMergeDuplicateTags(true);
+        request.setMergeAggressiveness("aggressive");
+        request.setDeleteUnusedTags(false);
+        request.setDeleteLowUsageTags(false);
+        request.setRecolorTags(false);
+        request.setCreateSmartCollections(false);
+
+        AiOrganizationResponse preview = organizationService.preview(request);
+
+        assertTrue(preview.getSemanticMergeGroupCount() >= 1);
+        assertTrue(preview.getSemanticMergeGroups().stream()
+                .anyMatch(group -> "STRUCTURE".equals(group.getSource())
+                        || "EXACT".equals(group.getSource())));
     }
 
     @Test
@@ -241,6 +276,125 @@ class AiOrganizationIntegrationTest extends IntegrationTestSupport {
                 .anyMatch(collection -> "ACTOR".equals(collection.getDimension())
                         && "Actor Three".equals(collection.getDisplayValue())
                         && Boolean.TRUE.equals(collection.getCreated())));
+    }
+
+    @Test
+    void previewRanksMetadataCandidatesAheadOfTagCandidatesWithEqualUsage() {
+        MediaLibrary library = createLibrary("ranked-candidates");
+        Tag sharedTag = tagRepository.save(Tag.builder()
+                .name("sharedtag")
+                .color("#8b5cf6")
+                .source("AI")
+                .build());
+        MediaItem first = createMovieWithMetadata(library, "Rank 1", "Studio Rank", "Shared Actor", "Action");
+        MediaItem second = createMovieWithMetadata(library, "Rank 2", "Studio Rank", "Shared Actor", "Action");
+        first.getTags().add(sharedTag);
+        second.getTags().add(sharedTag);
+        mediaItemRepository.saveAndFlush(first);
+        mediaItemRepository.saveAndFlush(second);
+
+        AiOrganizationRequest request = new AiOrganizationRequest();
+        request.setLibraryId(library.getId());
+        request.setCreateSmartCollections(true);
+        request.setMaxCollections(0);
+        request.setMinCollectionTagUsage(2);
+        request.setMinTagCollectionUsage(2);
+        request.setMergeDuplicateTags(false);
+        request.setDeleteUnusedTags(false);
+        request.setDeleteLowUsageTags(false);
+        request.setRecolorTags(false);
+
+        List<AiOrganizationResponse.SmartCollectionCandidate> candidates =
+                organizationService.preview(request).getSmartCollectionCandidates();
+        int actorIndex = candidateIndex(candidates, "ACTOR", "Shared Actor");
+        int tagIndex = candidateIndex(candidates, "TAG", "sharedtag");
+
+        assertTrue(actorIndex >= 0);
+        assertTrue(tagIndex >= 0);
+        assertTrue(actorIndex < tagIndex);
+    }
+
+    @Test
+    void previewExcludesCleanupTagsFromSmartCollectionCandidates() {
+        MediaLibrary library = createLibrary("cleanup-candidates");
+        Tag cleanupTag = tagRepository.save(Tag.builder()
+                .name("lowusage")
+                .color("#8b5cf6")
+                .source("AI")
+                .build());
+        MediaItem item = createMovieWithMetadata(library, "Cleanup 1", "Studio Cleanup", "Actor Cleanup", "Drama");
+        item.getTags().add(cleanupTag);
+        mediaItemRepository.saveAndFlush(item);
+
+        AiOrganizationRequest request = new AiOrganizationRequest();
+        request.setLibraryId(library.getId());
+        request.setCreateSmartCollections(true);
+        request.setMaxCollections(0);
+        request.setMinCollectionTagUsage(1);
+        request.setMinTagCollectionUsage(1);
+        request.setDeleteUnusedTags(false);
+        request.setDeleteLowUsageTags(true);
+        request.setLowUsageThreshold(5);
+        request.setProtectManualTags(false);
+        request.setMergeDuplicateTags(false);
+        request.setRecolorTags(false);
+
+        AiOrganizationResponse preview = organizationService.preview(request);
+
+        assertFalse(hasCandidate(preview, "TAG", "lowusage"));
+    }
+
+    @Test
+    void organizationCreatesUnlimitedSmartCollectionsWithFullItemCounts() throws Exception {
+        MediaLibrary library = createLibrary("unlimited-collections");
+        createMovieWithMetadata(library, "Unlimited 1", "Studio Unlimited", "Actor Unlimited", "Action");
+        createMovieWithMetadata(library, "Unlimited 2", "Studio Unlimited", "Actor Unlimited", "Action");
+
+        mockMvc.perform(post("/api/v1/ai/organization/apply")
+                        .header("Authorization", adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "libraryId": %d,
+                                  "mergeDuplicateTags": false,
+                                  "deleteUnusedTags": false,
+                                  "deleteLowUsageTags": false,
+                                  "recolorTags": false,
+                                  "createSmartCollections": true,
+                                  "maxCollections": 1,
+                                  "minCollectionTagUsage": 2,
+                                  "collectionItemLimit": 0
+                                }
+                                """.formatted(library.getId())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.accepted").value(true));
+
+        AiOrganizationJobStatus completed = waitForCompletion();
+        assertEquals("done", completed.getState());
+        assertEquals(1, completed.getCreatedCollectionCount());
+
+        mockMvc.perform(get("/api/v1/collections")
+                        .header("Authorization", adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].itemCount").value(2))
+                .andExpect(jsonPath("$.data[0].rule.limit").value(0));
+
+        assertTrue(collectionRepository.findAll().stream()
+                .anyMatch(collection -> collection.getRuleJson() != null
+                        && collection.getRuleJson().contains("\"limit\":0")));
+    }
+
+    private int candidateIndex(
+            List<AiOrganizationResponse.SmartCollectionCandidate> candidates,
+            String dimension,
+            String value) {
+        for (int index = 0; index < candidates.size(); index++) {
+            AiOrganizationResponse.SmartCollectionCandidate candidate = candidates.get(index);
+            if (dimension.equals(candidate.getDimension()) && value.equals(candidate.getValue())) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private MediaItem createMovieWithMetadata(

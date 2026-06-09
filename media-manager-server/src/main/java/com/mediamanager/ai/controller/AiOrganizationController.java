@@ -43,6 +43,7 @@ public class AiOrganizationController {
             @RequestParam(required = false) Integer lowUsageThreshold,
             @RequestParam(required = false) Integer maxCollections,
             @RequestParam(required = false) Integer minCollectionTagUsage,
+            @RequestParam(required = false) Integer minTagCollectionUsage,
             @RequestParam(required = false) Integer collectionItemLimit) {
         AiOrganizationRequest request = new AiOrganizationRequest();
         request.setLibraryId(libraryId);
@@ -56,6 +57,7 @@ public class AiOrganizationController {
         request.setLowUsageThreshold(lowUsageThreshold);
         request.setMaxCollections(maxCollections);
         request.setMinCollectionTagUsage(minCollectionTagUsage);
+        request.setMinTagCollectionUsage(minTagCollectionUsage);
         request.setCollectionItemLimit(collectionItemLimit);
         return ApiResponse.success(organizationService.preview(request));
     }

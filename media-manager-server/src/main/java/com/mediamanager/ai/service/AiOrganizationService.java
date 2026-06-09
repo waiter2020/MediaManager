@@ -6,7 +6,11 @@ import com.mediamanager.ai.dto.AiOrganizationRequest;
 import com.mediamanager.ai.dto.AiOrganizationResponse;
 import com.mediamanager.classification.repository.CategoryRepository;
 import com.mediamanager.classification.repository.TagRepository;
+import com.mediamanager.classification.service.DiscoveryScope;
+import com.mediamanager.classification.service.MergeAggressiveness;
 import com.mediamanager.classification.service.TagCanonicalizationService;
+import com.mediamanager.classification.service.TagMergeDiscoveryService;
+import com.mediamanager.classification.service.TagMergeSnapshot;
 import com.mediamanager.classification.service.TagQualityService;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.metadata.entity.AudioMetadata;
@@ -36,12 +40,13 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class AiOrganizationService {
 
-    private static final int DEFAULT_MAX_COLLECTIONS = 20;
+    private static final int UNLIMITED = 0;
+    private static final int DEFAULT_MAX_COLLECTIONS = 0;
     private static final int DEFAULT_MIN_COLLECTION_TAG_USAGE = 3;
-    private static final int DEFAULT_COLLECTION_ITEM_LIMIT = 50;
+    private static final int DEFAULT_MIN_TAG_COLLECTION_USAGE = 10;
+    private static final int DEFAULT_COLLECTION_ITEM_LIMIT = 0;
     private static final int DEFAULT_LOW_USAGE_THRESHOLD = 1;
-    private static final int MAX_COLLECTIONS = 50;
-    private static final int MAX_COLLECTION_ITEM_LIMIT = 200;
+    private static final int SQL_FETCH_LIMIT = Integer.MAX_VALUE;
     private static final String DIMENSION_TYPE = "TYPE";
     private static final String DIMENSION_GENRE = "GENRE";
     private static final String DIMENSION_CATEGORY = "CATEGORY";
@@ -62,6 +67,7 @@ public class AiOrganizationService {
     private final ImageMetadataRepository imageMetadataRepository;
     private final TagCanonicalizationService tagCanonicalizationService;
     private final TagQualityService tagQualityService;
+    private final TagMergeDiscoveryService tagMergeDiscoveryService;
     private final LibraryAccessService libraryAccessService;
     private final ObjectMapper objectMapper;
 
@@ -79,16 +85,21 @@ public class AiOrganizationService {
         AiOrganizationRequest source = request != null ? request : new AiOrganizationRequest();
         AiOrganizationRequest normalized = new AiOrganizationRequest();
         normalized.setLibraryId(source.getLibraryId());
-        normalized.setMaxCollections(clamp(source.getMaxCollections(), 1, MAX_COLLECTIONS, DEFAULT_MAX_COLLECTIONS));
+        normalized.setMaxCollections(normalizeOptionalLimit(
+                source.getMaxCollections(),
+                DEFAULT_MAX_COLLECTIONS));
         normalized.setMinCollectionTagUsage(clamp(
                 source.getMinCollectionTagUsage(),
                 1,
                 1000,
                 DEFAULT_MIN_COLLECTION_TAG_USAGE));
-        normalized.setCollectionItemLimit(clamp(
-                source.getCollectionItemLimit(),
+        normalized.setMinTagCollectionUsage(clamp(
+                source.getMinTagCollectionUsage(),
                 1,
-                MAX_COLLECTION_ITEM_LIMIT,
+                1000,
+                DEFAULT_MIN_TAG_COLLECTION_USAGE));
+        normalized.setCollectionItemLimit(normalizeOptionalLimit(
+                source.getCollectionItemLimit(),
                 DEFAULT_COLLECTION_ITEM_LIMIT));
         normalized.setLowUsageThreshold(clamp(
                 source.getLowUsageThreshold(),
@@ -102,6 +113,8 @@ public class AiOrganizationService {
         normalized.setRecolorTags(defaultBool(source.getRecolorTags(), true));
         normalized.setRecolorManualTags(defaultBool(source.getRecolorManualTags(), false));
         normalized.setCreateSmartCollections(defaultBool(source.getCreateSmartCollections(), true));
+        normalized.setMergeAggressiveness(
+                MergeAggressiveness.from(source.getMergeAggressiveness()).name().toLowerCase());
         return normalized;
     }
 
@@ -118,6 +131,10 @@ public class AiOrganizationService {
                         : List.of();
         List<AiOrganizationResponse.DuplicateTagGroup> duplicateGroups =
                 Boolean.TRUE.equals(request.getMergeDuplicateTags()) ? duplicateGroups(globalTags) : List.of();
+        List<AiOrganizationResponse.SemanticMergeGroup> semanticMergeGroups =
+                Boolean.TRUE.equals(request.getMergeDuplicateTags())
+                        ? semanticMergeGroups(request, globalTags)
+                        : List.of();
         List<AiOrganizationResponse.SmartCollectionCandidate> collectionCandidates =
                 Boolean.TRUE.equals(request.getCreateSmartCollections()) ? smartCollectionCandidates(request) : List.of();
 
@@ -127,6 +144,7 @@ public class AiOrganizationService {
                 .unusedTagCount(unusedTags.size())
                 .cleanupTagCount(cleanupTags.size())
                 .duplicateGroupCount(duplicateGroups.size())
+                .semanticMergeGroupCount(semanticMergeGroups.size())
                 .smartCollectionCandidateCount(collectionCandidates.size())
                 .deletedUnusedTagCount(0)
                 .deletedCleanupTagCount(0)
@@ -137,6 +155,7 @@ public class AiOrganizationService {
                 .unusedTags(unusedTags)
                 .cleanupTags(cleanupTags)
                 .duplicateTagGroups(duplicateGroups)
+                .semanticMergeGroups(semanticMergeGroups)
                 .smartCollectionCandidates(collectionCandidates)
                 .generatedCollections(List.of())
                 .build();
@@ -187,6 +206,55 @@ public class AiOrganizationService {
         return null;
     }
 
+    private List<AiOrganizationResponse.SemanticMergeGroup> semanticMergeGroups(
+            AiOrganizationRequest request,
+            List<AiOrganizationResponse.TagUsage> tags) {
+        Map<Integer, AiOrganizationResponse.TagUsage> byId = new LinkedHashMap<>();
+        List<TagMergeSnapshot> snapshots = new ArrayList<>();
+        for (AiOrganizationResponse.TagUsage tag : tags) {
+            if (tag == null || tag.getId() == null || tag.getName() == null || tag.getName().isBlank()) {
+                continue;
+            }
+            byId.put(tag.getId(), tag);
+            snapshots.add(new TagMergeSnapshot(
+                    tag.getId(),
+                    tag.getName(),
+                    tag.getUsageCount(),
+                    tag.getSource()));
+        }
+        MergeAggressiveness aggressiveness = MergeAggressiveness.from(request.getMergeAggressiveness());
+        return tagMergeDiscoveryService.discoverGroups(
+                        snapshots,
+                        aggressiveness,
+                        request.getLibraryId(),
+                        DiscoveryScope.PREVIEW)
+                .stream()
+                .filter(group -> !"EXACT".equals(group.source()))
+                .map(group -> toSemanticMergeGroup(group, byId))
+                .filter(group -> group.getCanonicalTag() != null && group.getDuplicateTags() != null
+                        && !group.getDuplicateTags().isEmpty())
+                .sorted(Comparator.comparing(group ->
+                        group.getCanonicalTag().getName(), String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
+
+    private AiOrganizationResponse.SemanticMergeGroup toSemanticMergeGroup(
+            TagMergeDiscoveryService.DiscoveredMergeGroup group,
+            Map<Integer, AiOrganizationResponse.TagUsage> byId) {
+        AiOrganizationResponse.TagUsage canonical = byId.get(group.canonicalId());
+        List<AiOrganizationResponse.TagUsage> duplicates = group.duplicateIds().stream()
+                .map(byId::get)
+                .filter(tag -> tag != null)
+                .toList();
+        return AiOrganizationResponse.SemanticMergeGroup.builder()
+                .source(group.source())
+                .confidence(group.confidence())
+                .reason(group.reason())
+                .canonicalTag(canonical)
+                .duplicateTags(duplicates)
+                .build();
+    }
+
     private List<AiOrganizationResponse.DuplicateTagGroup> duplicateGroups(
             List<AiOrganizationResponse.TagUsage> tags) {
         Map<String, List<AiOrganizationResponse.TagUsage>> byKey = tags.stream()
@@ -235,22 +303,47 @@ public class AiOrganizationService {
             return List.of();
         }
 
-        int perDimensionLimit = Math.min(Math.max(request.getMaxCollections(), 5), MAX_COLLECTIONS);
-        List<List<AiOrganizationResponse.SmartCollectionCandidate>> groups = new ArrayList<>();
-        groups.add(typeCollectionCandidates(libraryIds, request, perDimensionLimit));
-        groups.add(categoryCollectionCandidates(libraryIds, request, perDimensionLimit));
+        List<AiOrganizationResponse.TagUsage> globalTags = tagRepository.findGlobalUsageCounts().stream()
+                .map(this::toTagUsage)
+                .toList();
+        Set<Integer> excludedTagIds = excludedTagIds(request, globalTags);
+
+        int perDimensionLimit = request.getMaxCollections() != null && request.getMaxCollections() > 0
+                ? request.getMaxCollections()
+                : SQL_FETCH_LIMIT;
+
+        List<AiOrganizationResponse.SmartCollectionCandidate> candidates = new ArrayList<>();
+        candidates.addAll(typeCollectionCandidates(libraryIds, request, perDimensionLimit));
+        candidates.addAll(categoryCollectionCandidates(libraryIds, request, perDimensionLimit));
         Map<String, List<AiOrganizationResponse.SmartCollectionCandidate>> metadataGroups =
                 metadataCollectionCandidateGroups(libraryIds, request, perDimensionLimit);
-        groups.add(metadataGroups.getOrDefault(DIMENSION_GENRE, List.of()));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_PUBLISHER, List.of()));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_NETWORK, List.of()));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_ACTOR, List.of()));
-        groups.add(tagCollectionCandidates(libraryIds, request, perDimensionLimit));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_ARTIST, List.of()));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_ALBUM, List.of()));
-        groups.add(metadataGroups.getOrDefault(DIMENSION_CAMERA, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_GENRE, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_PUBLISHER, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_NETWORK, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_ACTOR, List.of()));
+        candidates.addAll(tagCollectionCandidates(libraryIds, request, perDimensionLimit, excludedTagIds));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_ARTIST, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_ALBUM, List.of()));
+        candidates.addAll(metadataGroups.getOrDefault(DIMENSION_CAMERA, List.of()));
 
-        return interleaveCandidates(groups, request.getMaxCollections());
+        return rankCandidates(candidates, request.getMaxCollections());
+    }
+
+    private Set<Integer> excludedTagIds(
+            AiOrganizationRequest request,
+            List<AiOrganizationResponse.TagUsage> globalTags) {
+        Set<Integer> excluded = new LinkedHashSet<>();
+        cleanupTags(request, globalTags).stream()
+                .map(AiOrganizationResponse.TagUsage::getId)
+                .filter(id -> id != null)
+                .forEach(excluded::add);
+        if (Boolean.TRUE.equals(request.getMergeDuplicateTags())) {
+            duplicateGroups(globalTags).forEach(group -> group.getDuplicateTags().stream()
+                    .map(AiOrganizationResponse.TagUsage::getId)
+                    .filter(id -> id != null)
+                    .forEach(excluded::add));
+        }
+        return excluded;
     }
 
     private List<AiOrganizationResponse.SmartCollectionCandidate> typeCollectionCandidates(
@@ -311,31 +404,45 @@ public class AiOrganizationService {
     private List<AiOrganizationResponse.SmartCollectionCandidate> tagCollectionCandidates(
             Set<Integer> libraryIds,
             AiOrganizationRequest request,
-            int limit) {
-        return tagRepository.findTopUsageCountsForLibraries(
+            int limit,
+            Set<Integer> excludedTagIds) {
+        Map<String, AiOrganizationResponse.SmartCollectionCandidate> bySemanticKey = new LinkedHashMap<>();
+        tagRepository.findTopUsageCountsForLibraries(
                         libraryIds,
-                        request.getMinCollectionTagUsage(),
+                        request.getMinTagCollectionUsage(),
                         limit)
                 .stream()
-                .map(row -> {
+                .filter(row -> row.getTagId() != null && !excludedTagIds.contains(row.getTagId()))
+                .forEach(row -> {
                     String name = safe(row.getTagName());
-                    return AiOrganizationResponse.SmartCollectionCandidate.builder()
-                            .key("tag:" + row.getTagId())
-                            .dimension(DIMENSION_TAG)
-                            .dimensionLabel(dimensionLabel(DIMENSION_TAG))
-                            .name(collectionName(DIMENSION_TAG, name))
-                            .value(name)
-                            .displayValue(name)
-                            .color(row.getColor())
-                            .source(row.getSource())
-                            .usageCount(row.getUsageCount() != null ? row.getUsageCount() : 0L)
-                            .tagId(row.getTagId())
-                            .tagName(name)
-                            .build();
-                })
-                .filter(candidate -> !candidate.getDisplayValue().isBlank())
-                .filter(candidate -> tagQualityService.qualityIssue(candidate.getDisplayValue()).isEmpty())
-                .toList();
+                    if (name.isBlank() || tagQualityService.qualityIssue(name).isPresent()) {
+                        return;
+                    }
+                    String semanticKey = tagCanonicalizationService.semanticKey(name);
+                    if (semanticKey.isBlank()) {
+                        return;
+                    }
+                    long usageCount = row.getUsageCount() != null ? row.getUsageCount() : 0L;
+                    AiOrganizationResponse.SmartCollectionCandidate candidate =
+                            AiOrganizationResponse.SmartCollectionCandidate.builder()
+                                    .key("tag:" + row.getTagId())
+                                    .dimension(DIMENSION_TAG)
+                                    .dimensionLabel(dimensionLabel(DIMENSION_TAG))
+                                    .name(collectionName(DIMENSION_TAG, name))
+                                    .value(name)
+                                    .displayValue(name)
+                                    .color(row.getColor())
+                                    .source(row.getSource())
+                                    .usageCount(usageCount)
+                                    .tagId(row.getTagId())
+                                    .tagName(name)
+                                    .build();
+                    AiOrganizationResponse.SmartCollectionCandidate existing = bySemanticKey.get(semanticKey);
+                    if (existing == null || usageCount > existing.getUsageCount()) {
+                        bySemanticKey.put(semanticKey, candidate);
+                    }
+                });
+        return new ArrayList<>(bySemanticKey.values());
     }
 
     private Map<String, List<AiOrganizationResponse.SmartCollectionCandidate>> metadataCollectionCandidateGroups(
@@ -412,34 +519,54 @@ public class AiOrganizationService {
                 .toList();
     }
 
-    private List<AiOrganizationResponse.SmartCollectionCandidate> interleaveCandidates(
-            List<List<AiOrganizationResponse.SmartCollectionCandidate>> groups,
-            int maxCollections) {
-        List<AiOrganizationResponse.SmartCollectionCandidate> result = new ArrayList<>();
+    private List<AiOrganizationResponse.SmartCollectionCandidate> rankCandidates(
+            List<AiOrganizationResponse.SmartCollectionCandidate> candidates,
+            Integer maxCollections) {
         Set<String> keys = new LinkedHashSet<>();
         Set<String> names = new LinkedHashSet<>();
-        int index = 0;
-        boolean hasMore;
-        do {
-            hasMore = false;
-            for (List<AiOrganizationResponse.SmartCollectionCandidate> group : groups) {
-                if (group == null || index >= group.size()) {
-                    continue;
-                }
-                hasMore = true;
-                AiOrganizationResponse.SmartCollectionCandidate candidate = group.get(index);
-                String key = safe(candidate.getKey()).toLowerCase(Locale.ROOT);
-                String name = safe(candidate.getName()).toLowerCase(Locale.ROOT);
-                if (keys.add(key) && names.add(name)) {
-                    result.add(candidate);
-                    if (result.size() >= maxCollections) {
-                        return result;
-                    }
-                }
-            }
-            index++;
-        } while (hasMore);
-        return result;
+        List<AiOrganizationResponse.SmartCollectionCandidate> ranked = candidates.stream()
+                .filter(candidate -> {
+                    String key = safe(candidate.getKey()).toLowerCase(Locale.ROOT);
+                    String name = safe(candidate.getName()).toLowerCase(Locale.ROOT);
+                    return keys.add(key) && names.add(name);
+                })
+                .sorted(Comparator
+                        .comparingDouble((AiOrganizationResponse.SmartCollectionCandidate candidate) ->
+                                candidateScore(candidate))
+                        .reversed()
+                        .thenComparingInt(candidate -> dimensionPriority(safe(candidate.getDimension())))
+                        .thenComparing(candidate -> safe(candidate.getDisplayValue()), String.CASE_INSENSITIVE_ORDER))
+                .toList();
+        if (maxCollections == null || maxCollections <= UNLIMITED) {
+            return ranked;
+        }
+        return ranked.stream().limit(maxCollections).toList();
+    }
+
+    private double candidateScore(AiOrganizationResponse.SmartCollectionCandidate candidate) {
+        long usage = candidate.getUsageCount() != null ? candidate.getUsageCount() : 0L;
+        return usage * dimensionWeight(safe(candidate.getDimension()));
+    }
+
+    private double dimensionWeight(String dimension) {
+        return switch (dimension) {
+            case DIMENSION_GENRE, DIMENSION_CATEGORY, DIMENSION_ACTOR,
+                 DIMENSION_PUBLISHER, DIMENSION_NETWORK -> 1.0;
+            case DIMENSION_TYPE, DIMENSION_ARTIST, DIMENSION_ALBUM, DIMENSION_CAMERA -> 0.8;
+            case DIMENSION_TAG -> 0.3;
+            default -> 0.5;
+        };
+    }
+
+    private int dimensionPriority(String dimension) {
+        return switch (dimension) {
+            case DIMENSION_GENRE, DIMENSION_CATEGORY -> 1;
+            case DIMENSION_ACTOR, DIMENSION_PUBLISHER, DIMENSION_NETWORK -> 2;
+            case DIMENSION_TYPE -> 3;
+            case DIMENSION_ARTIST, DIMENSION_ALBUM, DIMENSION_CAMERA -> 4;
+            case DIMENSION_TAG -> 5;
+            default -> 6;
+        };
     }
 
     private void addValues(
@@ -568,6 +695,16 @@ public class AiOrganizationService {
             return fallback;
         }
         return Math.min(max, Math.max(min, value));
+    }
+
+    private int normalizeOptionalLimit(Integer value, int fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        if (value <= UNLIMITED) {
+            return UNLIMITED;
+        }
+        return value;
     }
 
     private AiOrganizationResponse.TagUsage toTagUsage(TagRepository.TagUsageProjection row) {

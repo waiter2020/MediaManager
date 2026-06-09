@@ -77,7 +77,9 @@ export interface AiOrganizationRequest {
   lowUsageThreshold?: number;
   maxCollections?: number;
   minCollectionTagUsage?: number;
+  minTagCollectionUsage?: number;
   collectionItemLimit?: number;
+  mergeAggressiveness?: 'conservative' | 'standard' | 'aggressive';
 }
 
 export interface AiOrganizationTagUsage {
@@ -113,6 +115,14 @@ export interface AiOrganizationDuplicateGroup {
   duplicateTags: AiOrganizationTagUsage[];
 }
 
+export interface AiOrganizationSemanticMergeGroup {
+  source?: 'EXACT' | 'STRUCTURE' | 'EMBEDDING' | 'AI';
+  confidence?: number;
+  reason?: string;
+  canonicalTag: AiOrganizationTagUsage;
+  duplicateTags: AiOrganizationTagUsage[];
+}
+
 export interface AiOrganizationGeneratedCollection {
   id?: number;
   name: string;
@@ -136,6 +146,7 @@ export interface AiOrganizationResponse {
   unusedTagCount?: number;
   cleanupTagCount?: number;
   duplicateGroupCount?: number;
+  semanticMergeGroupCount?: number;
   smartCollectionCandidateCount?: number;
   deletedUnusedTagCount?: number;
   deletedCleanupTagCount?: number;
@@ -146,6 +157,7 @@ export interface AiOrganizationResponse {
   unusedTags?: AiOrganizationTagUsage[];
   cleanupTags?: AiOrganizationTagUsage[];
   duplicateTagGroups?: AiOrganizationDuplicateGroup[];
+  semanticMergeGroups?: AiOrganizationSemanticMergeGroup[];
   smartCollectionCandidates?: AiOrganizationSmartCollectionCandidate[];
   generatedCollections?: AiOrganizationGeneratedCollection[];
 }

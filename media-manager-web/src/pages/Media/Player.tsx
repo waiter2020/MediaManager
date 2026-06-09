@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { history, useParams, useSearchParams } from '@umijs/max';
 import { ArrowLeftOutlined, CustomerServiceOutlined, PictureOutlined, VideoCameraOutlined } from '@ant-design/icons';
-import { Button, Result, Segmented, Select, Spin } from 'antd';
+import { Button, Result, Segmented, Select, Spin, Tooltip } from 'antd';
 import VideoPlayer from '@/components/VideoPlayer';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { getItemDetail } from '@/services/media';
@@ -11,6 +11,8 @@ import {
   getRawImageUrl,
   getSubtitleTrackUrl,
   getTranscodeSpeed,
+  refreshStreamToken,
+  stopTranscode,
   resolveItemBackdropUrl,
   resolveItemPosterUrl,
   type PlaybackInfo,
@@ -105,13 +107,41 @@ const PlayerPage: React.FC = () => {
   const [fileId, setFileId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [playError, setPlayError] = useState<string | null>(null);
+  const [playerBuffering, setPlayerBuffering] = useState(false);
+  const [switchingPlayback, setSwitchingPlayback] = useState(false);
+  const [streamKey, setStreamKey] = useState(0);
+  const [mediaStartOffset, setMediaStartOffset] = useState(0);
   const [transcodeSpeed, setTranscodeSpeed] = useState<TranscodeTelemetry | null>(null);
   const lastAudioReportRef = useRef(0);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
 
+  const handleVideoProgress = useCallback(
+    (seconds: number) => {
+      if (data?.id) {
+        recordPlay({ mediaItemId: data.id, position: seconds }).catch(() => {});
+      }
+    },
+    [data?.id],
+  );
+
   const numericId = Number(id);
   const startSec = Number(searchParams.get('t'));
   const startTime = Number.isFinite(startSec) && startSec > 0 ? startSec : 0;
+  const searchKey = searchParams.toString();
+
+  const handlePlayerError = useCallback(
+    (message: string) => {
+      if (playbackMode === 'hls') {
+        console.warn('[Player] HLS playback error (may recover):', message);
+      }
+      setPlayError(message);
+    },
+    [playbackMode],
+  );
+
+  const handleBufferingChange = useCallback((buffering: boolean) => {
+    setPlayerBuffering(buffering);
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.add('standalone-player-root');
@@ -127,16 +157,25 @@ const PlayerPage: React.FC = () => {
     preferredMode: PlaybackModePreference = playbackPreference,
     quality: PlaybackQuality = selectedQuality,
     transcodeMode: TranscodeMode = selectedTranscodeMode,
+    resumeSeconds: number = startTime,
   ) => {
+    try {
+      await refreshStreamToken();
+    } catch {
+      // VideoPlayer also refreshes before HLS init; continue loading playback info.
+    }
+
     const playback = await getPlaybackInfo(nextFileId, {
       mode: preferredMode,
       quality,
       transcodeMode,
+      start: resumeSeconds > 0 ? resumeSeconds : undefined,
     });
     if (playback.code === 200 && playback.data?.url) {
       setPlaybackInfo(playback.data);
       setPlaybackMode(playback.data.mode === 'hls' ? 'hls' : 'direct');
       setStreamUrl(appendAuthToken(playback.data.url));
+      setMediaStartOffset(playback.data.startOffset ?? (resumeSeconds > 0 ? resumeSeconds : 0));
       if (playback.data.qualities?.length) {
         setQualityOptions(playback.data.qualities);
       }
@@ -202,7 +241,17 @@ const PlayerPage: React.FC = () => {
     if (Number.isFinite(numericId)) {
       fetchItem();
     }
-  }, [numericId, searchParams, startTime]);
+  }, [numericId, searchKey, startTime]);
+
+  const runPlaybackSwitch = async (action: () => Promise<void>) => {
+    setSwitchingPlayback(true);
+    setPlayError(null);
+    try {
+      await action();
+    } finally {
+      setSwitchingPlayback(false);
+    }
+  };
 
   useEffect(() => {
     if (playbackMode !== 'hls' || fileId == null) {
@@ -276,33 +325,70 @@ const PlayerPage: React.FC = () => {
     if (mode === 'direct') {
       setPlaybackMode('direct');
     }
-    setPlayError(null);
-    try {
-      await loadPlayback(fileId, mode);
-    } catch {
-      setPlayError(mode === 'hls' ? '无法启动兼容转码播放。' : '无法启动原画直连播放。');
-    }
+    await runPlaybackSwitch(async () => {
+      try {
+        await loadPlayback(fileId, mode);
+      } catch {
+        setPlayError(mode === 'hls' ? '无法启动兼容转码播放。' : '无法启动原画直连播放。');
+      }
+    });
   };
 
   const handleQualityChange = async (quality: PlaybackQuality) => {
     setSelectedQuality(quality);
     if (fileId == null || data?.type === 'IMAGE') return;
-    try {
-      await loadPlayback(fileId, playbackPreference, quality, selectedTranscodeMode);
-    } catch {
-      setPlayError('无法切换到所选质量档位。');
-    }
+    await runPlaybackSwitch(async () => {
+      try {
+        await loadPlayback(fileId, playbackPreference, quality, selectedTranscodeMode);
+      } catch {
+        setPlayError('无法切换到所选质量档位。');
+      }
+    });
   };
 
   const handleTranscodeModeChange = async (mode: TranscodeMode) => {
     setSelectedTranscodeMode(mode);
     if (fileId == null || data?.type === 'IMAGE') return;
-    try {
-      await loadPlayback(fileId, playbackPreference, selectedQuality, mode);
-    } catch {
-      setPlayError('无法切换到所选编码方式。');
-    }
+    await runPlaybackSwitch(async () => {
+      try {
+        await loadPlayback(fileId, playbackPreference, selectedQuality, mode);
+      } catch {
+        setPlayError('无法切换到所选编码方式。');
+      }
+    });
   };
+
+  const handleSeekRequest = useCallback(
+    async (absoluteSeconds: number) => {
+      if (fileId == null || switchingPlayback || playbackMode !== 'hls') return;
+      await runPlaybackSwitch(async () => {
+        setStreamKey((k) => k + 1);
+        await loadPlayback(
+          fileId,
+          playbackPreference,
+          selectedQuality,
+          selectedTranscodeMode,
+          absoluteSeconds,
+        );
+      });
+    },
+    [
+      fileId,
+      switchingPlayback,
+      playbackMode,
+      playbackPreference,
+      selectedQuality,
+      selectedTranscodeMode,
+    ],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (fileId != null && playbackMode === 'hls') {
+        stopTranscode(fileId).catch(() => {});
+      }
+    };
+  }, [fileId, playbackMode]);
 
   const renderTranscodeStatus = () => {
     if (playbackMode !== 'hls') return null;
@@ -327,6 +413,14 @@ const PlayerPage: React.FC = () => {
       return (
         <div className="player-center">
           <Spin size="large" tip="正在加载播放信息..." />
+        </div>
+      );
+    }
+
+    if (switchingPlayback) {
+      return (
+        <div className="player-center">
+          <Spin size="large" tip="正在切换播放参数..." />
         </div>
       );
     }
@@ -398,17 +492,22 @@ const PlayerPage: React.FC = () => {
 
     return (
       <div className="player-video-stage">
+        {playerBuffering && playbackMode === 'hls' ? (
+          <div className="player-hls-buffering-hint">正在等待首段转码，请稍候…</div>
+        ) : null}
         <VideoPlayer
+          key={streamKey}
           src={streamUrl}
           mode={playbackMode}
           poster={poster}
           fill
-          startTime={startTime}
+          startTime={playbackMode === 'hls' ? 0 : startTime}
+          mediaStartOffset={mediaStartOffset}
+          onSeekRequest={playbackMode === 'hls' ? handleSeekRequest : undefined}
           subtitles={subtitleTracks}
-          onError={setPlayError}
-          onProgress={(seconds) => {
-            recordPlay({ mediaItemId: data.id, position: seconds }).catch(() => {});
-          }}
+          onError={handlePlayerError}
+          onBufferingChange={handleBufferingChange}
+          onProgress={handleVideoProgress}
         />
       </div>
     );
@@ -469,7 +568,14 @@ const PlayerPage: React.FC = () => {
                 onChange={(value) => handleTranscodeModeChange(value as TranscodeMode)}
                 options={transcodeModeOptions.map((option) => ({
                   value: option.value,
-                  label: transcodeModeLabel(option.value),
+                  label:
+                    option.value === 'hardware' ? (
+                      <Tooltip title="需在 设置 → 媒体处理 中配置 GPU 加速类型">
+                        {transcodeModeLabel(option.value)}
+                      </Tooltip>
+                    ) : (
+                      transcodeModeLabel(option.value)
+                    ),
                 }))}
               />
             </>

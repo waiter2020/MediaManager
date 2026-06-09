@@ -1,15 +1,22 @@
 package com.mediamanager.system.dto;
 
+import jakarta.validation.constraints.Size;
 import lombok.Data;
-import jakarta.validation.constraints.*;
 
 @Data
 public class MediaProcessingSettingsUpdateRequest {
-    @NotBlank(message = "FFmpeg path is required")
     @Size(max = 255, message = "FFmpeg path cannot exceed 255 characters")
     private String ffmpegPath;
 
-    @NotBlank(message = "FFprobe path is required")
     @Size(max = 255, message = "FFprobe path cannot exceed 255 characters")
     private String ffprobePath;
+
+    @Size(max = 32, message = "Hardware acceleration type cannot exceed 32 characters")
+    private String hardwareAcceleration;
+
+    @Size(max = 255, message = "Hardware device path cannot exceed 255 characters")
+    private String hardwareDevice;
+
+    @Size(max = 64, message = "Hardware encoder cannot exceed 64 characters")
+    private String hardwareEncoder;
 }

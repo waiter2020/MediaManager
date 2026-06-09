@@ -77,7 +77,6 @@ public class AiTagTranslationService {
                 || HAN_CHARACTER.matcher(name).find()
                 || !LATIN_CHARACTER.matcher(name).find()
                 || TECHNICAL_TAG.matcher(tagCanonicalizationService.semanticKey(name)).matches()
-                || tagCanonicalizationService.translateToChinese(name).isPresent()
                 || tagQualityService.qualityIssue(name).isPresent()) {
             return false;
         }

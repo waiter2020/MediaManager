@@ -8,6 +8,7 @@ import com.mediamanager.ai.spi.AiProvider;
 import com.mediamanager.classification.repository.TagRepository;
 import com.mediamanager.classification.service.TagCanonicalizationService;
 import com.mediamanager.classification.service.TagQualityService;
+import com.mediamanager.classification.service.TagSimilarityService;
 import com.mediamanager.media.entity.MediaItem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,8 @@ class AiClassifierTest {
     @Mock
     private TagCanonicalizationService tagCanonicalizationService;
     @Mock
+    private TagSimilarityService tagSimilarityService;
+    @Mock
     private AiProvider provider;
 
     private AiClassifier classifier;
@@ -56,6 +59,7 @@ class AiClassifierTest {
                 tagRepository,
                 tagCanonicalizationService,
                 new TagQualityService(),
+                tagSimilarityService,
                 new ObjectMapper());
 
         when(aiOrchestrator.isClassifierEnabled()).thenReturn(true);

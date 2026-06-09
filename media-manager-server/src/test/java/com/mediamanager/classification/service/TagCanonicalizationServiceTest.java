@@ -14,12 +14,17 @@ class TagCanonicalizationServiceTest {
 
     @Mock
     private TagRepository tagRepository;
+    @Mock
+    private TagSimilarityService tagSimilarityService;
+    @Mock
+    private TagEmbeddingClusterService tagEmbeddingClusterService;
 
     private TagCanonicalizationService service;
 
     @BeforeEach
     void setUp() {
-        service = new TagCanonicalizationService(tagRepository);
+        service = new TagCanonicalizationService(
+                tagRepository, tagSimilarityService, tagEmbeddingClusterService);
     }
 
     @Test
@@ -30,12 +35,10 @@ class TagCanonicalizationServiceTest {
     }
 
     @Test
-    void mapsConservativeChineseSynonymsToSharedKeys() {
-        assertThat(service.semanticKey("\u62d8\u675f")).isEqualTo(service.semanticKey("\u6346\u7ed1"));
-        assertThat(service.semanticKey("\u6279\u5224")).isEqualTo(service.semanticKey("\u6279\u8bc4"));
-        assertThat(service.semanticKey("\u62a5\u590d")).isEqualTo(service.semanticKey("\u590d\u4ec7"));
-        assertThat(service.semanticKey("\u5c0f\u4fbf")).isEqualTo(service.semanticKey("\u6392\u5c3f"));
-        assertThat(service.semanticKey("\u62cd\u5c41\u80a1")).isEqualTo(service.semanticKey("\u6253\u5c41\u80a1"));
+    void keepsDistinctSynonymsOnDifferentNormalizedKeys() {
+        assertThat(service.semanticKey("\u62d8\u675f")).isNotEqualTo(service.semanticKey("\u6346\u7ed1"));
+        assertThat(service.semanticKey("\u6279\u5224")).isNotEqualTo(service.semanticKey("\u6279\u8bc4"));
+        assertThat(service.semanticKey("\u62a5\u590d")).isNotEqualTo(service.semanticKey("\u590d\u4ec7"));
     }
 
     @Test
@@ -43,5 +46,6 @@ class TagCanonicalizationServiceTest {
         assertThat(service.semanticKey("\u6309\u6469")).isNotEqualTo(service.semanticKey("\u6309\u6469\u68d2"));
         assertThat(service.semanticKey("\u6311\u6218")).isNotEqualTo(service.semanticKey("\u6311\u8845"));
         assertThat(service.semanticKey("\u6392\u4fbf")).isNotEqualTo(service.semanticKey("\u6392\u5c3f"));
+        assertThat(service.semanticKey("\u996e\u7cbe")).isNotEqualTo(service.semanticKey("\u996e\u9152"));
     }
 }

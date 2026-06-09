@@ -83,6 +83,47 @@ docker-compose logs -f
 
 PostgreSQL 数据持久化在 `./data/postgres`（通过 `./data` 卷挂载），与缩略图/HLS 缓存共用 `./data` 目录。
 
+## 硬件加速（HLS 转码）
+
+在 **设置 → 媒体处理** 中配置加速类型（无 / 自动 / NVENC / QSV / VA-API / AMF）、GPU 设备路径，并可点击「检测硬件加速」查看 FFmpeg 编码器可用性。`auto` 按 NVENC → QSV → VA-API → AMF 顺序自动选择；无可用 GPU 时 HLS 硬编码会回退软编码。
+
+### NVIDIA（NVENC）
+
+在 `docker-compose.yml` 中取消注释 GPU 相关配置，并设置环境变量：
+
+```yaml
+environment:
+  - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=nvenc
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: 1
+          capabilities: [gpu, video]
+```
+
+或使用 `runtime: nvidia`（需安装 NVIDIA Container Toolkit）。
+
+### Intel 核显（QSV / VA-API）
+
+挂载 DRI 设备并加入 `video`/`render` 组：
+
+```yaml
+environment:
+  - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=vaapi
+  - MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE=/dev/dri/renderD128
+devices:
+  - /dev/dri:/dev/dri
+group_add:
+  - video
+  - render
+```
+
+### 无 GPU
+
+保持默认 `auto` 或设为 `none`；播放器选择「硬编码」时后端会自动使用软编码（libx264）。
+
 ## 功能入口
 
 - 首次启动进入 `/setup` 创建管理员账号，之后通过 `/login` 登录。

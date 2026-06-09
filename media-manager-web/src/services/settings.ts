@@ -13,9 +13,30 @@ export interface SecuritySettings {
   restartRequired: boolean;
 }
 
+export type HardwareAccelerationType =
+  | 'none'
+  | 'auto'
+  | 'nvenc'
+  | 'qsv'
+  | 'vaapi'
+  | 'amf';
+
+export interface HardwareAccelerationProbe {
+  configuredType?: string;
+  resolvedType?: string;
+  resolvedEncoder?: string;
+  devicePath?: string;
+  encodersAvailable?: Record<string, boolean>;
+  warnings?: string[];
+}
+
 export interface MediaProcessingSettings {
   ffmpegPath: string;
   ffprobePath: string;
+  hardwareAcceleration?: HardwareAccelerationType | string;
+  hardwareDevice?: string;
+  hardwareEncoder?: string;
+  hardwareProbe?: HardwareAccelerationProbe;
 }
 
 export interface IntegrationsSettings {
@@ -62,10 +83,20 @@ export async function getMediaProcessingSettings() {
 export async function updateMediaProcessingSettings(data: {
   ffmpegPath?: string;
   ffprobePath?: string;
+  hardwareAcceleration?: string;
+  hardwareDevice?: string;
+  hardwareEncoder?: string;
 }) {
   return request<ApiResponse<MediaProcessingSettings>>(
     '/api/v1/system/settings/media-processing',
     { method: 'PUT', data },
+  );
+}
+
+export async function probeHardwareAcceleration() {
+  return request<ApiResponse<HardwareAccelerationProbe>>(
+    '/api/v1/system/hardware-acceleration/probe',
+    { method: 'GET' },
   );
 }
 

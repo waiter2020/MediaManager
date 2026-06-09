@@ -10,6 +10,8 @@ import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.system.dto.SystemLogEventDto;
 import com.mediamanager.system.repository.SysConfigRepository;
 import com.mediamanager.system.repository.SysUserRepository;
+import com.mediamanager.streaming.dto.HardwareAccelerationProbeDto;
+import com.mediamanager.streaming.service.HardwareAccelerationService;
 import com.mediamanager.system.dto.DirectoryDTO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -41,6 +43,7 @@ public class SystemController {
     private final LibraryScanService libraryScanService;
     private final com.mediamanager.system.service.SysConfigService sysConfigService;
     private final com.mediamanager.system.service.SystemCapabilitiesService capabilitiesService;
+    private final HardwareAccelerationService hardwareAccelerationService;
 
     @GetMapping("/status")
     @Operation(summary = "Get system status")
@@ -58,6 +61,13 @@ public class SystemController {
     @Operation(summary = "Get system runtime capabilities")
     public ApiResponse<Map<String, Object>> getCapabilities() {
         return ApiResponse.success(capabilitiesService.capabilitiesSnapshot());
+    }
+
+    @GetMapping("/hardware-acceleration/probe")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Probe FFmpeg hardware encoders and GPU devices")
+    public ApiResponse<HardwareAccelerationProbeDto> probeHardwareAcceleration() {
+        return ApiResponse.success(hardwareAccelerationService.probe());
     }
 
     @GetMapping("/directories")

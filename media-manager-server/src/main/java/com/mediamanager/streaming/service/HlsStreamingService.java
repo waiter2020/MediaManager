@@ -14,8 +14,10 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -51,14 +53,12 @@ public class HlsStreamingService {
     private final StreamService streamService;
     private final LibraryAccessService libraryAccessService;
     private final SysConfigService sysConfigService;
+    private final HardwareAccelerationService hardwareAccelerationService;
     private final Map<String, Object> generationLocks = new ConcurrentHashMap<>();
     private final Map<String, Process> activeProcesses = new ConcurrentHashMap<>();
 
     @Value("${mediamanager.ffmpeg.path:ffmpeg}")
     private String yamlFfmpegPath;
-
-    @Value("${mediamanager.playback.hardware-encoder:h264_nvenc}")
-    private String yamlHardwareEncoder;
 
     @Value("${mediamanager.data.cache-dir:./data/cache}")
     private String cacheDir;
@@ -66,7 +66,19 @@ public class HlsStreamingService {
     @Value("${mediamanager.hls.segment-duration:6}")
     private int segmentDuration;
 
-    @PreDestroy
+    @Value("${mediamanager.hls.playlist-wait-seconds-stream-copy:10}")
+    private int playlistWaitSecondsStreamCopy;
+
+    @Value("${mediamanager.hls.playlist-wait-seconds-transcode:90}")
+    private int playlistWaitSecondsTranscode;
+
+    @Value("${mediamanager.hls.segment-wait-seconds:30}")
+    private int segmentWaitSeconds;
+
+    @Value("${mediamanager.hls.idle-stop-seconds:120}")
+    private int idleStopSeconds;
+
+    private final Map<String, Long> lastAccessByProcessKey = new ConcurrentHashMap<>();
     public void shutdown() {
         log.info("Shutting down HlsStreamingService, terminating {} active FFmpeg processes...", activeProcesses.size());
         activeProcesses.forEach((key, process) -> {
@@ -79,6 +91,31 @@ public class HlsStreamingService {
             }
         });
         activeProcesses.clear();
+        lastAccessByProcessKey.clear();
+    }
+
+    public void stopTranscode(Integer fileId) {
+        stopActiveProcess(fileId);
+    }
+
+    @Scheduled(fixedDelayString = "${mediamanager.hls.idle-check-interval-ms:30000}")
+    public void evictIdleTranscodeProcesses() {
+        if (idleStopSeconds <= 0 || activeProcesses.isEmpty()) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - idleStopSeconds * 1000L;
+        List<String> staleKeys = activeProcesses.keySet().stream()
+                .filter(key -> lastAccessByProcessKey.getOrDefault(key, 0L) < cutoff)
+                .toList();
+        for (String key : staleKeys) {
+            log.info("Stopping idle HLS transcode process {}", key);
+            stopActiveProcess(key);
+        }
+    }
+
+    @PreDestroy
+    public void onDestroy() {
+        shutdown();
     }
 
     public void stopActiveProcess(Integer fileId) {
@@ -86,6 +123,7 @@ public class HlsStreamingService {
                 .filter(key -> key.startsWith(fileId + ":"))
                 .toList();
         keys.forEach(this::stopActiveProcess);
+        keys.forEach(lastAccessByProcessKey::remove);
     }
 
     public record TranscodeSpeedInfo(double speed, double fps, String time, String status) {}
@@ -154,9 +192,19 @@ public class HlsStreamingService {
             String requestedMode,
             String requestedQuality,
             String requestedTranscodeMode) {
+        return resolvePlaybackInfo(fileId, requestedMode, requestedQuality, requestedTranscodeMode, null);
+    }
+
+    public PlaybackInfoResponse resolvePlaybackInfo(
+            Integer fileId,
+            String requestedMode,
+            String requestedQuality,
+            String requestedTranscodeMode,
+            Double startSeconds) {
         MediaFile file = loadAuthorizedFile(fileId);
         PlaybackProfile profile = PlaybackProfile.of(requestedQuality, requestedTranscodeMode);
         String mode = normalizePlaybackMode(requestedMode);
+        double startOffset = normalizeStartOffset(startSeconds);
         boolean directPlayable = isDirectPlayable(file);
         boolean forceDirect = "direct".equals(mode);
         boolean forceHls = "hls".equals(mode)
@@ -166,26 +214,33 @@ public class HlsStreamingService {
         if (forceDirect || (!forceHls && directPlayable)) {
             streamService.resolveReadablePath(file);
             return toPlaybackInfo(file, profile, "direct", "DirectPlay",
-                    "/api/v1/stream/raw/" + fileId, directPlayable, false, buildReasons(file, profile, mode, directPlayable));
+                    "/api/v1/stream/raw/" + fileId, directPlayable, false, buildReasons(file, profile, mode, directPlayable), 0);
         }
 
         TranscodePlan plan = buildTranscodePlan(file, profile);
-        ensureHlsPlaylist(file, profile, plan);
+        kickoffHlsGeneration(file, profile, plan, startOffset);
         String playMethod = plan.strategy == EncodingStrategy.STREAM_COPY ? "DirectStream" : "Transcode";
+        String hlsUrl = buildHlsMasterUrl(fileId, profile.variantKey(), startOffset);
         return toPlaybackInfo(file, profile, "hls", playMethod,
-                "/api/v1/stream/" + fileId + "/hls/" + profile.variantKey() + "/master.m3u8",
+                hlsUrl,
                 directPlayable, plan.strategy != EncodingStrategy.STREAM_COPY,
-                buildReasons(file, profile, mode, directPlayable));
+                buildReasons(file, profile, mode, directPlayable), startOffset);
     }
 
     public Resource getMasterPlaylist(Integer fileId) {
-        return getMasterPlaylist(fileId, new PlaybackProfile(PlaybackQuality.AUTO, TranscodeMode.AUTO));
+        return getMasterPlaylist(fileId, new PlaybackProfile(PlaybackQuality.AUTO, TranscodeMode.AUTO), null);
     }
 
     public Resource getMasterPlaylist(Integer fileId, PlaybackProfile profile) {
+        return getMasterPlaylist(fileId, profile, null);
+    }
+
+    public Resource getMasterPlaylist(Integer fileId, PlaybackProfile profile, Double startSeconds) {
         MediaFile file = loadAuthorizedFile(fileId);
-        Path playlist = ensureHlsPlaylist(file, profile, buildTranscodePlan(file, profile));
-        return new FileSystemResource(playlist);
+        double startOffset = normalizeStartOffset(startSeconds);
+        Path playlist = ensureHlsPlaylist(file, profile, buildTranscodePlan(file, profile), startOffset);
+        touchProcessAccess(file.getId(), profile, startOffset);
+        return servePlaylistResource(playlist, startOffset);
     }
 
     public Resource getSegment(Integer fileId, String segmentName) {
@@ -198,8 +253,11 @@ public class HlsStreamingService {
         }
         PlaybackProfile profile = PlaybackProfile.fromVariant(variant);
         MediaFile file = loadAuthorizedFile(fileId);
-        Path segment = profileDir(fileId, profile).resolve(segmentName);
-        waitForSegmentIfActive(fileId, profile, segment);
+        Path outDir = profileDir(fileId, profile);
+        double startOffset = readStartOffsetMarker(outDir);
+        Path segment = outDir.resolve(segmentName);
+        touchProcessAccess(fileId, profile, startOffset);
+        waitForSegmentIfActive(fileId, profile, segment, startOffset);
 
         if (!Files.exists(segment)) {
             throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND);
@@ -220,50 +278,76 @@ public class HlsStreamingService {
         return file;
     }
 
-    private Path ensureHlsPlaylist(MediaFile file, PlaybackProfile profile, TranscodePlan plan) {
+    private void kickoffHlsGeneration(MediaFile file, PlaybackProfile profile, TranscodePlan plan, double startOffset) {
         Path outDir = profileDir(file.getId(), profile);
         Path playlist = outDir.resolve("master.m3u8");
         Path source = streamService.resolveReadablePath(file);
 
-        if (isFreshPlaylist(playlist, source)) {
-            return playlist;
+        if (isFreshPlaylist(playlist, source, startOffset)) {
+            return;
         }
 
-        String key = processKey(file.getId(), profile);
+        String key = processKey(file.getId(), profile, startOffset);
         Object lock = generationLocks.computeIfAbsent(key, ignored -> new Object());
         synchronized (lock) {
             try {
                 Process activeProcess = activeProcesses.get(key);
                 if (activeProcess != null && activeProcess.isAlive()) {
-                    waitForPlaylist(playlist);
+                    return;
+                }
+
+                if (isFreshPlaylist(playlist, source, startOffset)) {
+                    return;
+                }
+
+                Files.createDirectories(outDir);
+                cleanupOldHlsFiles(outDir);
+
+                log.info("Kickoff HLS generation for fileId={}, variant={}, strategy={}, start={}s",
+                        file.getId(), profile.variantKey(), plan.strategy, startOffset);
+                runFfmpegHlsAsync(file, profile, source, outDir, playlist, plan, startOffset);
+            } catch (IOException e) {
+                log.error("HLS kickoff failed for file {}", file.getId(), e);
+                throw new BusinessException(ErrorCode.FFMPEG_ERROR, "HLS generation failed");
+            } finally {
+                generationLocks.remove(key, lock);
+            }
+        }
+    }
+
+    private Path ensureHlsPlaylist(MediaFile file, PlaybackProfile profile, TranscodePlan plan, double startOffset) {
+        Path outDir = profileDir(file.getId(), profile);
+        Path playlist = outDir.resolve("master.m3u8");
+        Path source = streamService.resolveReadablePath(file);
+
+        if (isFreshPlaylist(playlist, source, startOffset)) {
+            return playlist;
+        }
+
+        String key = processKey(file.getId(), profile, startOffset);
+        Object lock = generationLocks.computeIfAbsent(key, ignored -> new Object());
+        synchronized (lock) {
+            try {
+                Process activeProcess = activeProcesses.get(key);
+                if (activeProcess != null && activeProcess.isAlive()) {
+                    waitForPlaylist(playlist, plan.strategy, activeProcess);
                     return playlist;
                 }
 
-                if (isFreshPlaylist(playlist, source)) {
+                if (isFreshPlaylist(playlist, source, startOffset)) {
                     return playlist;
                 }
 
                 Files.createDirectories(outDir);
                 cleanupOldHlsFiles(outDir);
 
-                log.info("Starting HLS generation for fileId={}, variant={}, strategy={}",
-                        file.getId(), profile.variantKey(), plan.strategy);
-                runFfmpegHlsAsync(file, profile, source, outDir, playlist, plan);
+                log.info("Starting HLS generation for fileId={}, variant={}, strategy={}, start={}s",
+                        file.getId(), profile.variantKey(), plan.strategy, startOffset);
+                runFfmpegHlsAsync(file, profile, source, outDir, playlist, plan, startOffset);
 
-                boolean playlistCreated = waitForPlaylist(playlist);
                 Process process = activeProcesses.get(key);
-                if (!playlistCreated
-                        && plan.strategy == EncodingStrategy.STREAM_COPY
-                        && process != null
-                        && !process.isAlive()
-                        && process.exitValue() != 0) {
-                    log.info("HLS stream-copy for fileId={} variant={} exited with code {}, retrying software transcode",
-                            file.getId(), profile.variantKey(), process.exitValue());
-                    cleanupOldHlsFiles(outDir);
-                    TranscodePlan fallback = new TranscodePlan(EncodingStrategy.SOFTWARE, null);
-                    runFfmpegHlsAsync(file, profile, source, outDir, playlist, fallback);
-                    playlistCreated = waitForPlaylist(playlist);
-                }
+                boolean playlistCreated = waitForPlaylistWithFallback(
+                        file, profile, source, outDir, playlist, plan, startOffset, process);
 
                 if (!playlistCreated) {
                     throw new BusinessException(ErrorCode.FFMPEG_ERROR, "HLS playlist generation timed out");
@@ -278,26 +362,75 @@ public class HlsStreamingService {
         }
     }
 
+    private boolean waitForPlaylistWithFallback(
+            MediaFile file,
+            PlaybackProfile profile,
+            Path source,
+            Path outDir,
+            Path playlist,
+            TranscodePlan plan,
+            double startOffset,
+            Process process) throws IOException {
+        boolean playlistCreated = waitForPlaylist(playlist, plan.strategy, process);
+        if (playlistCreated) {
+            return true;
+        }
+        if (process != null && !process.isAlive() && process.exitValue() != 0
+                && (plan.strategy == EncodingStrategy.HARDWARE || plan.strategy == EncodingStrategy.STREAM_COPY)) {
+            log.info("HLS {} failed quickly for fileId={} variant={} (exit {}), retrying software transcode",
+                    plan.strategy, file.getId(), profile.variantKey(), process.exitValue());
+            return retrySoftwareTranscode(
+                    file, profile, source, outDir, playlist, plan.strategy, process.exitValue(), startOffset);
+        }
+        return false;
+    }
+
+    private boolean retrySoftwareTranscode(
+            MediaFile file,
+            PlaybackProfile profile,
+            Path source,
+            Path outDir,
+            Path playlist,
+            EncodingStrategy failedStrategy,
+            int exitCode,
+            double startOffset) throws IOException {
+        if (failedStrategy != EncodingStrategy.STREAM_COPY && failedStrategy != EncodingStrategy.HARDWARE) {
+            return false;
+        }
+        log.info("HLS {} for fileId={} variant={} exited with code {}, retrying software transcode",
+                failedStrategy, file.getId(), profile.variantKey(), exitCode);
+        cleanupOldHlsFiles(outDir);
+        TranscodePlan fallback = new TranscodePlan(EncodingStrategy.SOFTWARE, null, null);
+        runFfmpegHlsAsync(file, profile, source, outDir, playlist, fallback, startOffset);
+        return waitForPlaylist(playlist, EncodingStrategy.SOFTWARE, activeProcesses.get(processKey(file.getId(), profile, startOffset)));
+    }
+
     private void runFfmpegHlsAsync(
             MediaFile file,
             PlaybackProfile profile,
             Path source,
             Path outDir,
             Path playlist,
-            TranscodePlan plan) throws IOException {
+            TranscodePlan plan,
+            double startOffset) throws IOException {
         if (!Files.exists(source)) {
             throw new BusinessException(ErrorCode.FILE_SYSTEM_ERROR, "Source file not found: " + source);
         }
 
-        String key = processKey(file.getId(), profile);
-        stopActiveProcess(key);
+        String key = processKey(file.getId(), profile, startOffset);
+        stopActiveProcess(file.getId());
 
         String segmentPattern = outDir.resolve("%04d.ts").toString();
         List<String> command = new ArrayList<>();
         command.add(sysConfigService.ffmpegPath(yamlFfmpegPath));
+        command.addAll(List.of("-hide_banner", "-y"));
+        if (startOffset > 0.5) {
+            command.addAll(List.of("-ss", formatSeekSeconds(startOffset)));
+        }
+        if (plan.strategy == EncodingStrategy.HARDWARE && plan.resolvedHw() != null) {
+            hardwareAccelerationService.appendHardwareInputArgs(command, plan.resolvedHw());
+        }
         command.addAll(List.of(
-                "-hide_banner",
-                "-y",
                 "-i", source.toString(),
                 "-map", "0:v:0?",
                 "-map", "0:a:0?",
@@ -308,6 +441,7 @@ public class HlsStreamingService {
             command.addAll(List.of("-c", "copy"));
         } else {
             addVideoTranscodeArgs(command, file, profile, plan);
+            appendHlsKeyframeArgs(command);
             command.addAll(List.of("-c:a", "aac", "-b:a", "160k", "-ac", "2"));
         }
 
@@ -326,8 +460,11 @@ public class HlsStreamingService {
         pb.redirectOutput(outDir.resolve(plan.logFileName()).toFile());
 
         log.debug("Launching FFmpeg process for {}. Command: {}", key, String.join(" ", pb.command()));
+        writeStartOffsetMarker(outDir, startOffset);
+
         Process process = pb.start();
         activeProcesses.put(key, process);
+        touchProcessAccess(file.getId(), profile, startOffset);
 
         Thread.ofVirtual().name("ffmpeg-watcher-" + key.replace(':', '-')).start(() -> {
             try {
@@ -338,8 +475,16 @@ public class HlsStreamingService {
                 Thread.currentThread().interrupt();
             } finally {
                 activeProcesses.remove(key, process);
+                lastAccessByProcessKey.remove(key);
             }
         });
+    }
+
+    private void appendHlsKeyframeArgs(List<String> command) {
+        int gop = Math.max(segmentDuration * 24, segmentDuration);
+        command.addAll(List.of(
+                "-g", String.valueOf(gop),
+                "-force_key_frames", "expr:gte(t,n_forced*" + segmentDuration + ")"));
     }
 
     private void addVideoTranscodeArgs(
@@ -348,18 +493,18 @@ public class HlsStreamingService {
             PlaybackProfile profile,
             TranscodePlan plan) {
         String scale = scaleFilter(file, profile.effectiveQuality());
+
+        if (plan.strategy == EncodingStrategy.HARDWARE) {
+            int bitrate = targetVideoBitrateKbps(file, profile.effectiveQuality());
+            hardwareAccelerationService.appendHardwareEncodeArgs(command, plan.resolvedHw(), scale, bitrate);
+            return;
+        }
+
         if (scale != null) {
             command.addAll(List.of("-vf", scale));
         }
 
-        if (plan.strategy == EncodingStrategy.HARDWARE) {
-            command.addAll(List.of("-c:v", hardwareEncoder()));
-            int bitrate = targetVideoBitrateKbps(file, profile.effectiveQuality());
-            command.addAll(videoBitrateArgs(bitrate));
-            return;
-        }
-
-        command.addAll(List.of("-c:v", "libx264", "-preset", "veryfast"));
+        command.addAll(List.of("-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"));
         if (profile.effectiveQuality().constrained()) {
             int bitrate = targetVideoBitrateKbps(file, profile.effectiveQuality());
             command.addAll(videoBitrateArgs(bitrate));
@@ -378,25 +523,37 @@ public class HlsStreamingService {
 
     private TranscodePlan buildTranscodePlan(MediaFile file, PlaybackProfile profile) {
         if (profile.transcodeMode() == TranscodeMode.HARDWARE) {
-            return new TranscodePlan(EncodingStrategy.HARDWARE, hardwareEncoder());
+            HardwareAccelerationService.ResolvedHardwareAcceleration hw =
+                    hardwareAccelerationService.resolveForTranscode();
+            if (!hw.available()) {
+                log.info(
+                        "Hardware transcode requested but unavailable (configured={}, resolved={}), using software",
+                        hw.configuredType().value(),
+                        hw.resolvedType().value());
+                return new TranscodePlan(EncodingStrategy.SOFTWARE, null, null);
+            }
+            return new TranscodePlan(EncodingStrategy.HARDWARE, hw.encoderName(), hw);
         }
         if (profile.transcodeMode() == TranscodeMode.SOFTWARE) {
-            return new TranscodePlan(EncodingStrategy.SOFTWARE, null);
+            return new TranscodePlan(EncodingStrategy.SOFTWARE, null, null);
         }
         if (profile.effectiveQuality().constrained()) {
-            return new TranscodePlan(EncodingStrategy.SOFTWARE, null);
+            return new TranscodePlan(EncodingStrategy.SOFTWARE, null, null);
         }
         if (canStreamCopyHls(file)) {
-            return new TranscodePlan(EncodingStrategy.STREAM_COPY, null);
+            return new TranscodePlan(EncodingStrategy.STREAM_COPY, null, null);
         }
-        return new TranscodePlan(EncodingStrategy.SOFTWARE, null);
+        return new TranscodePlan(EncodingStrategy.SOFTWARE, null, null);
     }
 
-    private boolean isFreshPlaylist(Path playlist, Path source) {
+    private boolean isFreshPlaylist(Path playlist, Path source, double startOffset) {
         if (!Files.exists(playlist) || !Files.exists(source)) {
             return false;
         }
         try {
+            if (Math.abs(readStartOffsetMarker(playlist.getParent()) - startOffset) > 0.5) {
+                return false;
+            }
             return Files.size(playlist) > 0
                     && Files.getLastModifiedTime(playlist).toMillis() >= Files.getLastModifiedTime(source).toMillis();
         } catch (IOException e) {
@@ -405,16 +562,17 @@ public class HlsStreamingService {
         }
     }
 
-    private void waitForSegmentIfActive(Integer fileId, PlaybackProfile profile, Path segment) {
+    private void waitForSegmentIfActive(Integer fileId, PlaybackProfile profile, Path segment, double startOffset) {
         if (Files.exists(segment)) {
             return;
         }
-        Process activeProcess = activeProcesses.get(processKey(fileId, profile));
+        Process activeProcess = findActiveProcess(fileId, profile, startOffset).orElse(null);
         if (activeProcess == null || !activeProcess.isAlive()) {
             return;
         }
         log.debug("Segment {} not ready yet, waiting for active FFmpeg process...", segment.getFileName());
-        for (int i = 0; i < 50; i++) {
+        int maxAttempts = Math.max(1, segmentWaitSeconds * 10);
+        for (int i = 0; i < maxAttempts; i++) {
             sleepQuietly(100);
             if (Files.exists(segment) || !activeProcess.isAlive()) {
                 break;
@@ -422,8 +580,18 @@ public class HlsStreamingService {
         }
     }
 
-    private boolean waitForPlaylist(Path playlist) {
-        for (int i = 0; i < 50; i++) {
+    private boolean waitForPlaylist(Path playlist, EncodingStrategy strategy, Process process) {
+        int pollIntervalMs = 200;
+        int waitSeconds = strategy == EncodingStrategy.STREAM_COPY
+                ? playlistWaitSecondsStreamCopy
+                : playlistWaitSecondsTranscode;
+        int maxAttempts = Math.max(1, (waitSeconds * 1000) / pollIntervalMs);
+        for (int i = 0; i < maxAttempts; i++) {
+            if (process != null && !process.isAlive()) {
+                if (process.exitValue() != 0) {
+                    return false;
+                }
+            }
             if (Files.exists(playlist)) {
                 try {
                     if (Files.size(playlist) > 0) {
@@ -432,7 +600,7 @@ public class HlsStreamingService {
                 } catch (IOException ignored) {
                 }
             }
-            sleepQuietly(200);
+            sleepQuietly(pollIntervalMs);
         }
         return false;
     }
@@ -444,7 +612,8 @@ public class HlsStreamingService {
         try (var stream = Files.list(outDir)) {
             stream.filter(path -> {
                         String name = path.getFileName().toString();
-                        return name.endsWith(".ts") || name.endsWith(".m3u8") || name.endsWith(".log");
+                        return name.endsWith(".ts") || name.endsWith(".m3u8") || name.endsWith(".log")
+                                || name.equals("start.offset");
                     })
                     .forEach(path -> {
                         try {
@@ -464,7 +633,8 @@ public class HlsStreamingService {
             String url,
             boolean directPlayable,
             boolean transcoding,
-            List<String> reasons) {
+            List<String> reasons,
+            double startOffset) {
         return new PlaybackInfoResponse(
                 mode,
                 playMethod,
@@ -480,6 +650,8 @@ public class HlsStreamingService {
                 file.getWidth(),
                 file.getHeight(),
                 file.getBitrate(),
+                startOffset,
+                file.getDurationSeconds(),
                 PlaybackQuality.optionsFor(file).stream()
                         .map(quality -> new PlaybackInfoResponse.PlaybackOption(
                                 quality.value(), quality.label(), quality.maxHeight(), quality.videoBitrateKbps()))
@@ -660,15 +832,117 @@ public class HlsStreamingService {
     }
 
     private String processKey(Integer fileId, PlaybackProfile profile) {
-        return fileId + ":" + profile.variantKey();
+        return processKey(fileId, profile, 0);
+    }
+
+    private String processKey(Integer fileId, PlaybackProfile profile, double startOffset) {
+        String base = fileId + ":" + profile.variantKey();
+        if (startOffset > 0.5) {
+            return base + ":s" + Math.round(startOffset);
+        }
+        return base;
+    }
+
+    private Optional<Process> findActiveProcess(Integer fileId, PlaybackProfile profile, double startOffset) {
+        String exactKey = processKey(fileId, profile, startOffset);
+        Process exact = activeProcesses.get(exactKey);
+        if (exact != null && exact.isAlive()) {
+            return Optional.of(exact);
+        }
+        String prefix = fileId + ":" + profile.variantKey();
+        return activeProcesses.entrySet().stream()
+                .filter(entry -> entry.getKey().equals(prefix) || entry.getKey().startsWith(prefix + ":s"))
+                .filter(entry -> entry.getValue().isAlive())
+                .map(Map.Entry::getValue)
+                .findFirst();
+    }
+
+    private double normalizeStartOffset(Double startSeconds) {
+        if (startSeconds == null || startSeconds.isNaN() || startSeconds.isInfinite() || startSeconds <= 0.5) {
+            return 0;
+        }
+        return startSeconds;
+    }
+
+    private String formatSeekSeconds(double seconds) {
+        return String.format(Locale.ROOT, "%.3f", seconds);
+    }
+
+    private String buildHlsMasterUrl(Integer fileId, String variantKey, double startOffset) {
+        String url = "/api/v1/stream/" + fileId + "/hls/" + variantKey + "/master.m3u8";
+        if (startOffset > 0.5) {
+            url += "?start=" + Math.round(startOffset);
+        }
+        return url;
+    }
+
+    private void writeStartOffsetMarker(Path outDir, double startOffset) throws IOException {
+        Files.writeString(outDir.resolve("start.offset"), Long.toString(Math.round(startOffset)), StandardCharsets.UTF_8);
+    }
+
+    private double readStartOffsetMarker(Path outDir) {
+        Path marker = outDir.resolve("start.offset");
+        if (!Files.exists(marker)) {
+            return 0;
+        }
+        try {
+            String raw = Files.readString(marker, StandardCharsets.UTF_8).trim();
+            return raw.isBlank() ? 0 : Double.parseDouble(raw);
+        } catch (IOException | NumberFormatException e) {
+            return 0;
+        }
     }
 
     private void stopActiveProcess(String key) {
         Process process = activeProcesses.remove(key);
+        lastAccessByProcessKey.remove(key);
         if (process != null && process.isAlive()) {
             log.info("Terminating active FFmpeg process for {}", key);
             process.destroyForcibly();
         }
+    }
+
+    private void touchProcessAccess(Integer fileId, PlaybackProfile profile, double startOffset) {
+        String key = processKey(fileId, profile, startOffset);
+        if (activeProcesses.containsKey(key)) {
+            lastAccessByProcessKey.put(key, System.currentTimeMillis());
+            return;
+        }
+        findActiveProcess(fileId, profile, startOffset)
+                .ifPresent(process -> activeProcesses.entrySet().stream()
+                        .filter(entry -> entry.getValue() == process)
+                        .map(Map.Entry::getKey)
+                        .findFirst()
+                        .ifPresent(activeKey -> lastAccessByProcessKey.put(activeKey, System.currentTimeMillis())));
+    }
+
+    private Resource servePlaylistResource(Path playlist, double startOffset) {
+        try {
+            if (!Files.exists(playlist)) {
+                return new FileSystemResource(playlist);
+            }
+            String content = Files.readString(playlist, StandardCharsets.UTF_8);
+            if (startOffset > 0.5 && !content.contains("#EXT-X-START:")) {
+                content = injectPlaylistStartTag(content, startOffset);
+                return new ByteArrayResource(content.getBytes(StandardCharsets.UTF_8));
+            }
+            return new FileSystemResource(playlist);
+        } catch (IOException e) {
+            log.debug("Failed to prepare HLS playlist {}", playlist, e);
+            return new FileSystemResource(playlist);
+        }
+    }
+
+    private String injectPlaylistStartTag(String content, double startOffset) {
+        String startTag = String.format(Locale.ROOT,
+                "#EXT-X-START:TIME-OFFSET=%.3f,PRECISE=YES", startOffset);
+        if (content.startsWith("#EXTM3U")) {
+            int lineEnd = content.indexOf('\n');
+            if (lineEnd >= 0) {
+                return content.substring(0, lineEnd + 1) + startTag + "\n" + content.substring(lineEnd + 1);
+            }
+        }
+        return startTag + "\n" + content;
     }
 
     private Optional<String> resolveTelemetryKey(Integer fileId, String variant) {
@@ -703,10 +977,6 @@ public class HlsStreamingService {
                     }
                 })
                 .orElse(null);
-    }
-
-    private String hardwareEncoder() {
-        return sysConfigService.getString("playback.hardware_encoder", yamlHardwareEncoder).trim();
     }
 
     private double parseFfmpegDouble(String line, String token, double fallback) {
@@ -793,7 +1063,10 @@ public class HlsStreamingService {
         HARDWARE
     }
 
-    private record TranscodePlan(EncodingStrategy strategy, String encoder) {
+    private record TranscodePlan(
+            EncodingStrategy strategy,
+            String encoder,
+            HardwareAccelerationService.ResolvedHardwareAcceleration resolvedHw) {
         private String logFileName() {
             return switch (strategy) {
                 case STREAM_COPY -> "ffmpeg-copy.log";

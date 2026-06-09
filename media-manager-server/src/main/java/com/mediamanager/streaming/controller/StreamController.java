@@ -70,8 +70,9 @@ public class StreamController {
             @PathVariable Integer fileId,
             @RequestParam(required = false, defaultValue = "auto") String mode,
             @RequestParam(required = false, defaultValue = "auto") String quality,
-            @RequestParam(required = false, defaultValue = "auto") String transcodeMode) {
-        return ApiResponse.success(hlsStreamingService.resolvePlaybackInfo(fileId, mode, quality, transcodeMode));
+            @RequestParam(required = false, defaultValue = "auto") String transcodeMode,
+            @RequestParam(required = false) Double start) {
+        return ApiResponse.success(hlsStreamingService.resolvePlaybackInfo(fileId, mode, quality, transcodeMode, start));
     }
 
     @GetMapping(value = "/{fileId}", headers = "!" + HttpHeaders.RANGE)
@@ -161,6 +162,13 @@ public class StreamController {
         return ApiResponse.success(hlsStreamingService.getTranscodeSpeed(fileId, variant));
     }
 
+    @PostMapping("/{fileId}/transcode/stop")
+    @PreAuthorize("hasAuthority('media:play')")
+    public ApiResponse<Void> stopTranscode(@PathVariable Integer fileId) {
+        hlsStreamingService.stopTranscode(fileId);
+        return ApiResponse.success();
+    }
+
     @GetMapping("/{fileId}/hls/master.m3u8")
     @PreAuthorize("hasAuthority('media:play')")
     public ResponseEntity<Resource> hlsMaster(
@@ -175,9 +183,10 @@ public class StreamController {
     @PreAuthorize("hasAuthority('media:play')")
     public ResponseEntity<Resource> hlsMasterVariant(
             @PathVariable Integer fileId,
-            @PathVariable String variant) {
+            @PathVariable String variant,
+            @RequestParam(required = false) Double start) {
         return hlsPlaylistResponse(hlsStreamingService.getMasterPlaylist(
-                fileId, PlaybackProfile.fromVariant(variant)));
+                fileId, PlaybackProfile.fromVariant(variant), start));
     }
 
     @GetMapping("/{fileId}/hls/{segment}")

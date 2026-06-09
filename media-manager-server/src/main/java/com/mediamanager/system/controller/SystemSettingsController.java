@@ -10,6 +10,7 @@ import com.mediamanager.system.dto.MediaProcessingSettingsDto;
 import com.mediamanager.system.dto.MediaProcessingSettingsUpdateRequest;
 import com.mediamanager.system.dto.SecuritySettingsDto;
 import com.mediamanager.system.dto.SecuritySettingsUpdateRequest;
+import com.mediamanager.streaming.service.HardwareAccelerationService;
 import com.mediamanager.system.repository.SysUserRepository;
 import com.mediamanager.system.service.SysConfigService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,6 +32,7 @@ public class SystemSettingsController {
 
     private final SysConfigService sysConfigService;
     private final SysUserRepository userRepository;
+    private final HardwareAccelerationService hardwareAccelerationService;
 
     @GetMapping("/summary")
     @PreAuthorize("hasAuthority('system:manage')")
@@ -56,17 +58,21 @@ public class SystemSettingsController {
 
     @GetMapping("/media-processing")
     @PreAuthorize("hasAuthority('system:manage')")
-    @Operation(summary = "FFmpeg / FFprobe paths")
+    @Operation(summary = "FFmpeg / FFprobe paths and hardware acceleration")
     public ApiResponse<MediaProcessingSettingsDto> getMediaProcessing() {
-        return ApiResponse.success(sysConfigService.getMediaProcessingSettings());
+        MediaProcessingSettingsDto settings = sysConfigService.getMediaProcessingSettings();
+        settings.setHardwareProbe(hardwareAccelerationService.probe());
+        return ApiResponse.success(settings);
     }
 
     @PutMapping("/media-processing")
     @PreAuthorize("hasAuthority('system:manage')")
-    @Operation(summary = "Update media processing paths")
+    @Operation(summary = "Update media processing paths and hardware acceleration")
     public ApiResponse<MediaProcessingSettingsDto> updateMediaProcessing(
             @Valid @RequestBody MediaProcessingSettingsUpdateRequest request) {
-        return ApiResponse.success(sysConfigService.updateMediaProcessingSettings(request));
+        MediaProcessingSettingsDto settings = sysConfigService.updateMediaProcessingSettings(request);
+        settings.setHardwareProbe(hardwareAccelerationService.probe());
+        return ApiResponse.success(settings);
     }
 
     @GetMapping("/integrations")

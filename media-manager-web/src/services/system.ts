@@ -57,6 +57,11 @@ export interface SystemCapabilities {
   isNoopProvider?: boolean;
   aiDegraded?: boolean;
   aiDegradedReason?: string;
+  hardwareAccelerationConfigured?: string;
+  hardwareAccelerationResolved?: string;
+  hardwareEncoderAvailable?: boolean;
+  hardwareAccelerationWarnings?: string[];
+  hardwareEncodersAvailable?: Record<string, boolean>;
 }
 
 export interface SystemLogEvent {

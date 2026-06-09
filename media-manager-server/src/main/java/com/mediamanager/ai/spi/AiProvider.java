@@ -26,6 +26,13 @@ public interface AiProvider extends MediaManagerPlugin {
 
     float[] embedText(String text, Map<String, Object> config);
 
+    default List<float[]> embedTexts(List<String> texts, Map<String, Object> config) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        return texts.stream().map(text -> embedText(text, config)).toList();
+    }
+
     Optional<String> completeMetadata(String prompt, Map<String, Object> config);
 
     List<String> suggestTags(String prompt, Map<String, Object> config);

@@ -17,6 +17,8 @@ public record PlaybackInfoResponse(
         Integer width,
         Integer height,
         Integer bitrate,
+        Double startOffset,
+        Integer durationSeconds,
         List<PlaybackOption> qualities,
         List<PlaybackOption> transcodeModes,
         List<String> transcodingReasons

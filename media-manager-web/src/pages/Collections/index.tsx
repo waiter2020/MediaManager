@@ -399,7 +399,7 @@ const CollectionsPage: React.FC = () => {
             type: 'COLLECTION',
             visibility: 'PRIVATE',
             smart: false,
-            rule: { sortField: 'createdAt', sortOrder: 'DESC', limit: 50 },
+            rule: { sortField: 'createdAt', sortOrder: 'DESC', limit: 0 },
           }}
           style={{ marginTop: 16 }}
         >
@@ -453,8 +453,12 @@ const CollectionsPage: React.FC = () => {
               <Form.Item name={['rule', 'minRating']} label="Min rating">
                 <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item name={['rule', 'limit']} label="Limit">
-                <InputNumber min={1} max={200} style={{ width: '100%' }} />
+              <Form.Item
+                name={['rule', 'limit']}
+                label="Limit"
+                tooltip="0 表示无限制"
+              >
+                <InputNumber min={0} placeholder="无限制" style={{ width: '100%' }} />
               </Form.Item>
               <Form.Item name={['rule', 'sortField']} label="Sort by">
                 <Select

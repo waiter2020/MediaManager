@@ -190,6 +190,25 @@ public class AiOrchestrator {
                 .embedText(text, defaultConfig(libraryId, AiTaskType.EMBED_TEXT));
     }
 
+    public List<float[]> embedTexts(List<String> texts, Integer libraryId) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        return resolve(libraryId, AiTaskType.EMBED_TEXT)
+                .embedTexts(texts, defaultConfig(libraryId, AiTaskType.EMBED_TEXT));
+    }
+
+    public Map<String, Object> embedConfig(Integer libraryId) {
+        return defaultConfig(libraryId, AiTaskType.EMBED_TEXT);
+    }
+
+    public String embedModelId(Integer libraryId) {
+        Map<String, Object> config = embedConfig(libraryId);
+        String providerId = String.valueOf(config.getOrDefault("providerId", "noop"));
+        String modelId = String.valueOf(config.getOrDefault("embedModel", "text-embedding-3-small"));
+        return providerId + ":" + modelId;
+    }
+
     public boolean isEmbeddingAvailable() {
         try {
             var health = healthCheckScheduler.getCachedHealth();

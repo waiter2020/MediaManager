@@ -30,6 +30,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -41,6 +42,9 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class MediaCollectionService {
+
+    private static final int UNLIMITED_LIMIT = 0;
+    private static final int SMART_FETCH_BATCH_SIZE = 500;
 
     private final MediaCollectionRepository collectionRepository;
     private final MediaCollectionItemRepository collectionItemRepository;
@@ -194,7 +198,11 @@ public class MediaCollectionService {
         List<MediaItem> visibleItems;
         MediaItem firstItem;
         long itemCount;
-        if (!includeItems && !smart) {
+        if (!includeItems && smart) {
+            visibleItems = List.of();
+            itemCount = smartItemCount(collection);
+            firstItem = smartCoverItem(collection);
+        } else if (!includeItems && !smart) {
             Page<MediaItem> summaryPage = manualItemPage(collection, PageRequest.of(0, 1));
             visibleItems = List.of();
             firstItem = summaryPage.getContent().stream().findFirst().orElse(null);
@@ -202,7 +210,7 @@ public class MediaCollectionService {
         } else {
             visibleItems = visibleMediaItems(collection);
             firstItem = visibleItems.isEmpty() ? null : visibleItems.get(0);
-            itemCount = visibleItems.size();
+            itemCount = smart ? smartItemCount(collection) : visibleItems.size();
         }
         List<MediaItemResponse> items = includeItems
                 ? visibleItems.stream()
@@ -287,22 +295,15 @@ public class MediaCollectionService {
         }
 
         int limit = normalizeLimit(rule.getLimit());
-        Specification<MediaItem> spec = MediaItemSpecification.filterBy(
-                libraryIds,
-                normalizeRuleType(rule.getType()),
-                trimToNull(rule.getKeyword()),
-                toIdSet(rule.getCategoryIds()),
-                toIdSet(rule.getTagIds()),
-                rule.getMinYear(),
-                rule.getMaxYear(),
-                rule.getMinRating(),
-                rule.getMetadataField(),
-                rule.getMetadataValue());
+        Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
+        Sort sort = resolveRuleSort(rule.getSortField(), rule.getSortOrder());
         Page<MediaItem> itemPage = mediaItemRepository.findAll(
                 spec,
-                PageRequest.of(page - 1, size, resolveRuleSort(rule.getSortField(), rule.getSortOrder())));
-        long total = Math.min(itemPage.getTotalElements(), limit);
-        int remaining = Math.max(limit - ((page - 1) * size), 0);
+                PageRequest.of(page - 1, size, sort));
+        long total = isUnlimitedLimit(limit) ? itemPage.getTotalElements() : Math.min(itemPage.getTotalElements(), limit);
+        int remaining = isUnlimitedLimit(limit)
+                ? size
+                : Math.max(Math.min(limit - ((page - 1) * size), size), 0);
         List<MediaItemResponse> responses = itemPage.getContent().stream()
                 .limit(remaining)
                 .map(mediaItemService::toResponsePublic)
@@ -314,10 +315,71 @@ public class MediaCollectionService {
         MediaCollectionRuleDto rule = readRule(collection);
         Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
         Set<Integer> libraryIds = resolveRuleLibraryIds(rule, viewableLibraryIds);
+        if (libraryIds.isEmpty()) {
+            return List.of();
+        }
         int limit = normalizeLimit(rule.getLimit());
-        int pageSize = Boolean.TRUE.equals(rule.getUnwatchedOnly()) ? Math.min(limit * 5, 500) : limit;
+        Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
+        Sort sort = resolveRuleSort(rule.getSortField(), rule.getSortOrder());
 
-        Specification<MediaItem> spec = MediaItemSpecification.filterBy(
+        List<MediaItem> items;
+        if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
+            int scanSize = isUnlimitedLimit(limit) ? SMART_FETCH_BATCH_SIZE : Math.min(limit * 5, 500);
+            items = fetchSmartItems(spec, sort, scanSize);
+            Optional<SysUser> user = securityCurrentUser.getCurrentUser();
+            if (user.isPresent()) {
+                Set<Integer> watchedIds = new LinkedHashSet<>(
+                        playbackHistoryRepository.findCompletedMediaItemIdsByUserId(user.get().getId()));
+                items = items.stream()
+                        .filter(item -> !watchedIds.contains(item.getId()))
+                        .collect(Collectors.toList());
+            } else {
+                items = List.of();
+            }
+        } else if (isUnlimitedLimit(limit)) {
+            items = fetchAllSmartItems(spec, sort);
+        } else {
+            items = fetchSmartItems(spec, sort, limit);
+        }
+        return isUnlimitedLimit(limit) ? items : items.stream().limit(limit).collect(Collectors.toList());
+    }
+
+    private long smartItemCount(MediaCollection collection) {
+        MediaCollectionRuleDto rule = readRule(collection);
+        if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
+            return smartItems(collection).size();
+        }
+        Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
+        Set<Integer> libraryIds = resolveRuleLibraryIds(rule, viewableLibraryIds);
+        if (libraryIds.isEmpty()) {
+            return 0L;
+        }
+        int limit = normalizeLimit(rule.getLimit());
+        Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
+        long total = mediaItemRepository.count(spec);
+        return isUnlimitedLimit(limit) ? total : Math.min(total, limit);
+    }
+
+    private MediaItem smartCoverItem(MediaCollection collection) {
+        MediaCollectionRuleDto rule = readRule(collection);
+        if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
+            List<MediaItem> items = smartItems(collection);
+            return items.isEmpty() ? null : items.get(0);
+        }
+        Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
+        Set<Integer> libraryIds = resolveRuleLibraryIds(rule, viewableLibraryIds);
+        if (libraryIds.isEmpty()) {
+            return null;
+        }
+        Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
+        Page<MediaItem> page = mediaItemRepository.findAll(
+                spec,
+                PageRequest.of(0, 1, resolveRuleSort(rule.getSortField(), rule.getSortOrder())));
+        return page.getContent().stream().findFirst().orElse(null);
+    }
+
+    private Specification<MediaItem> buildSmartSpecification(MediaCollectionRuleDto rule, Set<Integer> libraryIds) {
+        return MediaItemSpecification.filterBy(
                 libraryIds,
                 normalizeRuleType(rule.getType()),
                 trimToNull(rule.getKeyword()),
@@ -328,26 +390,23 @@ public class MediaCollectionService {
                 rule.getMinRating(),
                 rule.getMetadataField(),
                 rule.getMetadataValue());
+    }
 
-        List<MediaItem> items = mediaItemRepository.findAll(
-                        spec,
-                        PageRequest.of(0, pageSize, resolveRuleSort(rule.getSortField(), rule.getSortOrder())))
-                .getContent();
+    private List<MediaItem> fetchSmartItems(Specification<MediaItem> spec, Sort sort, int maxItems) {
+        Page<MediaItem> page = mediaItemRepository.findAll(spec, PageRequest.of(0, maxItems, sort));
+        return new ArrayList<>(page.getContent());
+    }
 
-        if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
-            Optional<SysUser> user = securityCurrentUser.getCurrentUser();
-            if (user.isPresent()) {
-                Set<Integer> watchedIds = new LinkedHashSet<>(
-                        playbackHistoryRepository.findCompletedMediaItemIdsByUserId(user.get().getId()));
-                items = items.stream()
-                        .filter(item -> !watchedIds.contains(item.getId()))
-                        .limit(limit)
-                        .collect(Collectors.toList());
-            } else {
-                items = List.of();
-            }
-        }
-        return items.stream().limit(limit).collect(Collectors.toList());
+    private List<MediaItem> fetchAllSmartItems(Specification<MediaItem> spec, Sort sort) {
+        List<MediaItem> all = new ArrayList<>();
+        int page = 0;
+        Page<MediaItem> batch;
+        do {
+            batch = mediaItemRepository.findAll(spec, PageRequest.of(page, SMART_FETCH_BATCH_SIZE, sort));
+            all.addAll(batch.getContent());
+            page++;
+        } while (batch.hasNext());
+        return all;
     }
 
     private Set<Integer> resolveRuleLibraryIds(MediaCollectionRuleDto rule, Set<Integer> viewableLibraryIds) {
@@ -445,10 +504,14 @@ public class MediaCollectionService {
     }
 
     private int normalizeLimit(Integer limit) {
-        if (limit == null) {
-            return 50;
+        if (limit == null || limit <= UNLIMITED_LIMIT) {
+            return UNLIMITED_LIMIT;
         }
-        return Math.min(Math.max(limit, 1), 200);
+        return limit;
+    }
+
+    private boolean isUnlimitedLimit(int limit) {
+        return limit <= UNLIMITED_LIMIT;
     }
 
     private void assertManualCollection(MediaCollection collection) {
