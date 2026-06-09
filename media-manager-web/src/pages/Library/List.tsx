@@ -19,7 +19,8 @@ import {
 } from '@ant-design/icons';
 import { history, useAccess, useModel } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
-import { deleteLibrary, getLibraries, triggerScan } from '@/services/library';
+import LibraryScanModal from '@/components/LibraryScanModal';
+import { deleteLibrary, getLibraries } from '@/services/library';
 import type { ScanProgress } from '@/models/global';
 import type { LibraryPath, MediaLibrary } from '@/types/library';
 import './List.css';
@@ -71,6 +72,8 @@ const LibraryList: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [keyword, setKeyword] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
+  const [scanModalOpen, setScanModalOpen] = useState(false);
+  const [scanTarget, setScanTarget] = useState<{ id: number; name: string } | null>(null);
   const { scanStatus } = useModel('global');
   const access = useAccess();
 
@@ -97,12 +100,10 @@ const LibraryList: React.FC = () => {
     }
   };
 
-  const handleScan = async (e: React.MouseEvent, id: number) => {
+  const handleScan = (e: React.MouseEvent, lib: MediaLibrary) => {
     e.stopPropagation();
-    const res = await triggerScan(id);
-    if (res.code === 200) {
-      message.success('扫描任务已触发');
-    }
+    setScanTarget({ id: lib.id, name: lib.name });
+    setScanModalOpen(true);
   };
 
   const filteredLibraries = useMemo(() => {
@@ -304,7 +305,7 @@ const LibraryList: React.FC = () => {
                             size="small"
                             type="text"
                             icon={<SyncOutlined spin={isScanning} />}
-                            onClick={(e) => handleScan(e, lib.id)}
+                            onClick={(e) => handleScan(e, lib)}
                             disabled={isScanning}
                           />
                         </Tooltip>
@@ -373,6 +374,16 @@ const LibraryList: React.FC = () => {
           </div>
         )}
       </div>
+
+      <LibraryScanModal
+        open={scanModalOpen}
+        libraryId={scanTarget?.id}
+        libraryName={scanTarget?.name}
+        onClose={() => {
+          setScanModalOpen(false);
+          setScanTarget(null);
+        }}
+      />
     </div>
   );
 };

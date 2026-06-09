@@ -35,7 +35,9 @@ public class SysConfigService {
             "ai.openai.api_key",
             "ai.openai.llm.api_key",
             "ai.openai.embed.api_key",
-            "tmdb.api_key"
+            "tmdb.api_key",
+            "opensubtitles.api_key",
+            "opensubtitles.password"
     );
 
     private static final Set<String> ALLOWED_THEMES = Set.of("dark", "light", "system");
@@ -62,6 +64,15 @@ public class SysConfigService {
 
     @Value("${mediamanager.ai.ollama.base-url:http://localhost:11434}")
     private String yamlOllamaBaseUrl;
+
+    @Value("${mediamanager.subtitle.default-language:zh-CN}")
+    private String yamlSubtitleDefaultLanguage;
+
+    @Value("${mediamanager.subtitle.user-agent:MediaManager/1.0}")
+    private String yamlSubtitleUserAgent;
+
+    @Value("${mediamanager.subtitle.opensubtitles.base-url:https://api.opensubtitles.com/api/v1}")
+    private String yamlOpensubtitlesBaseUrl;
 
     private volatile Map<String, String> cache = Map.of();
     private volatile Boolean effectiveAuthEnabled;
@@ -234,11 +245,24 @@ public class SysConfigService {
     }
 
     public IntegrationsSettingsDto getIntegrationsSettings() {
-        String raw = rawConfigValue("tmdb.api_key");
-        boolean configured = !raw.isBlank();
+        String tmdbRaw = rawConfigValue("tmdb.api_key");
+        boolean tmdbConfigured = !tmdbRaw.isBlank();
+        String osApiKeyRaw = rawConfigValue("opensubtitles.api_key");
+        boolean osApiKeyConfigured = !osApiKeyRaw.isBlank();
+        String osUsernameRaw = rawConfigValue("opensubtitles.username");
+        boolean osUsernameConfigured = !osUsernameRaw.isBlank();
+        String osPasswordRaw = rawConfigValue("opensubtitles.password");
+        boolean osPasswordConfigured = !osPasswordRaw.isBlank();
         return IntegrationsSettingsDto.builder()
-                .tmdbApiKey(configured ? "***" : "")
-                .tmdbApiKeyConfigured(configured)
+                .tmdbApiKey(tmdbConfigured ? "***" : "")
+                .tmdbApiKeyConfigured(tmdbConfigured)
+                .opensubtitlesApiKey(osApiKeyConfigured ? "***" : "")
+                .opensubtitlesApiKeyConfigured(osApiKeyConfigured)
+                .opensubtitlesUsername(osUsernameConfigured ? osUsernameRaw : "")
+                .opensubtitlesUsernameConfigured(osUsernameConfigured)
+                .opensubtitlesPassword(osPasswordConfigured ? "***" : "")
+                .opensubtitlesPasswordConfigured(osPasswordConfigured)
+                .subtitleDefaultLanguage(subtitleDefaultLanguage())
                 .build();
     }
 
@@ -246,12 +270,59 @@ public class SysConfigService {
     public IntegrationsSettingsDto updateIntegrationsSettings(IntegrationsSettingsUpdateRequest request) {
         if (request.getTmdbApiKey() != null) {
             String key = request.getTmdbApiKey().trim();
-            if ("***".equals(key) || key.isEmpty()) {
-                return getIntegrationsSettings();
+            if (!"***".equals(key) && !key.isEmpty()) {
+                updateSingle("tmdb.api_key", key);
             }
-            updateSingle("tmdb.api_key", key);
+        }
+        if (request.getOpensubtitlesApiKey() != null) {
+            String key = request.getOpensubtitlesApiKey().trim();
+            if (!"***".equals(key) && !key.isEmpty()) {
+                updateSingle("opensubtitles.api_key", key);
+            }
+        }
+        if (request.getOpensubtitlesUsername() != null) {
+            String username = request.getOpensubtitlesUsername().trim();
+            if (!username.isEmpty()) {
+                updateSingle("opensubtitles.username", username);
+            }
+        }
+        if (request.getOpensubtitlesPassword() != null) {
+            String password = request.getOpensubtitlesPassword().trim();
+            if (!"***".equals(password) && !password.isEmpty()) {
+                updateSingle("opensubtitles.password", password);
+            }
+        }
+        if (request.getSubtitleDefaultLanguage() != null) {
+            String language = request.getSubtitleDefaultLanguage().trim();
+            if (!language.isEmpty()) {
+                updateSingle("subtitle.default_language", language);
+            }
         }
         return getIntegrationsSettings();
+    }
+
+    public String subtitleDefaultLanguage() {
+        return getString("subtitle.default_language", yamlSubtitleDefaultLanguage);
+    }
+
+    public String subtitleUserAgent() {
+        return getString("subtitle.user_agent", yamlSubtitleUserAgent);
+    }
+
+    public String opensubtitlesBaseUrl() {
+        return yamlOpensubtitlesBaseUrl;
+    }
+
+    public String opensubtitlesApiKey() {
+        return getString("opensubtitles.api_key", "");
+    }
+
+    public String opensubtitlesUsername() {
+        return getString("opensubtitles.username", "");
+    }
+
+    public String opensubtitlesPassword() {
+        return getString("opensubtitles.password", "");
     }
 
     public AppearanceSettingsDto getAppearanceSettings() {

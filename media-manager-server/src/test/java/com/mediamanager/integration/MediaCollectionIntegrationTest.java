@@ -85,6 +85,19 @@ class MediaCollectionIntegrationTest extends IntegrationTestSupport {
     }
 
     @Test
+    void collectionItemsCanBeSortedByTitle() throws Exception {
+        mockMvc.perform(get("/api/v1/collections/{id}/items", collection.getId())
+                        .param("page", "1")
+                        .param("size", "5")
+                        .param("sortField", "title")
+                        .param("sortOrder", "asc")
+                        .header("Authorization", adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].title").value("Item 1"))
+                .andExpect(jsonPath("$.data.items[4].title").value("Item 5"));
+    }
+
+    @Test
     void collectionSummaryOmitsItemsButKeepsCount() throws Exception {
         mockMvc.perform(get("/api/v1/collections/{id}", collection.getId())
                         .param("includeItems", "false")

@@ -407,7 +407,7 @@ public class ScrapeTaskService {
             pipelineResult.mergeFrom(fallback);
         }
         metadataApplyService.applyResult(item.getId(), pipelineResult, primaryFile != null ? primaryFile.getId() : null);
-        mediaPostProcessService.afterMetadataUpdatedAsync(item.getId());
+        mediaPostProcessService.afterMetadataUpdatedAsync(item.getId(), "SCRAPE");
     }
 
     private boolean isTaskCancelled(Integer taskId) {

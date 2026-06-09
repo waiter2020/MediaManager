@@ -10,6 +10,8 @@ import com.mediamanager.system.dto.MediaProcessingSettingsDto;
 import com.mediamanager.system.dto.MediaProcessingSettingsUpdateRequest;
 import com.mediamanager.system.dto.SecuritySettingsDto;
 import com.mediamanager.system.dto.SecuritySettingsUpdateRequest;
+import com.mediamanager.system.dto.SubtitleSettingsDto;
+import com.mediamanager.media.service.SubtitleSettingsService;
 import com.mediamanager.streaming.service.HardwareAccelerationService;
 import com.mediamanager.system.repository.SysUserRepository;
 import com.mediamanager.system.service.SysConfigService;
@@ -31,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class SystemSettingsController {
 
     private final SysConfigService sysConfigService;
+    private final SubtitleSettingsService subtitleSettingsService;
     private final SysUserRepository userRepository;
     private final HardwareAccelerationService hardwareAccelerationService;
 
@@ -102,6 +105,13 @@ public class SystemSettingsController {
     @Operation(summary = "Update UI appearance")
     public ApiResponse<AppearanceSettingsDto> updateAppearance(@Valid @RequestBody AppearanceSettingsUpdateRequest request) {
         return ApiResponse.success(sysConfigService.updateAppearanceSettings(request));
+    }
+
+    @GetMapping("/subtitles")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Subtitle search provider status")
+    public ApiResponse<SubtitleSettingsDto> getSubtitleSettings() {
+        return ApiResponse.success(subtitleSettingsService.getSubtitleSettings());
     }
 }
 

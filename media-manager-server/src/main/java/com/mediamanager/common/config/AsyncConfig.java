@@ -42,9 +42,9 @@ public class AsyncConfig {
     @Bean(name = "postProcessExecutor")
     public Executor postProcessExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(1);
-        executor.setMaxPoolSize(1);
-        executor.setQueueCapacity(1000);
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("mm-post-");
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);

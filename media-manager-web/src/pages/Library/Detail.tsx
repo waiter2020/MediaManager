@@ -11,10 +11,10 @@ import {
   getLibraryClassifyStatus,
   type LibraryClassifyStatus,
 } from '@/services/classification';
+import LibraryScanModal from '@/components/LibraryScanModal';
 import {
   getLibrary,
   getLibraryStats,
-  triggerScan,
   type LibraryStats,
 } from '@/services/library';
 import { getItems } from '@/services/media';
@@ -38,7 +38,7 @@ const LibraryDetail: React.FC = () => {
   const actionRef = useRef<ActionType>();
   const [stats, setStats] = useState<LibraryStatsView | null>(null);
   const [plugins, setPlugins] = useState<PluginSummary[]>([]);
-  const [scanning, setScanning] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
   const [scraping, setScraping] = useState(false);
   const [classifying, setClassifying] = useState(false);
   const [classifyStatus, setClassifyStatus] = useState<LibraryClassifyStatus | null>(null);
@@ -140,18 +140,6 @@ const LibraryDetail: React.FC = () => {
     }
   };
 
-  const handleScan = async () => {
-    setScanning(true);
-    try {
-      const res = await triggerScan(libraryId);
-      if (res.code === 200) {
-        message.success('扫描已启动');
-      }
-    } finally {
-      setScanning(false);
-    }
-  };
-
   const showScraperWarning = libraryTypeNeedsScraper(stats?.libraryType) && !hasEnabledScraper(plugins);
   const classifyRunning = classifyStatus?.running && classifyStatus?.libraryId === libraryId;
 
@@ -183,7 +171,7 @@ const LibraryDetail: React.FC = () => {
           )}
           {access.canManageLibrary && <Button onClick={() => history.push(`/libraries/${id}/edit`)}>编辑</Button>}
           {access.canScanLibrary && (
-            <Button type="primary" loading={scanning} onClick={handleScan}>
+            <Button type="primary" onClick={() => setScanModalOpen(true)}>
               扫描库
             </Button>
           )}
@@ -294,6 +282,13 @@ const LibraryDetail: React.FC = () => {
           };
         }}
         search={false}
+      />
+
+      <LibraryScanModal
+        open={scanModalOpen}
+        libraryId={libraryId}
+        libraryName={stats?.libraryName}
+        onClose={() => setScanModalOpen(false)}
       />
     </PageContainer>
   );

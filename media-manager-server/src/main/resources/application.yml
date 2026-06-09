@@ -108,6 +108,17 @@ mediamanager:
     batch-size: 50               # Items per batch
     request-delay-ms: 2000       # Delay between requests (anti-ban)
     timeout-seconds: 30          # HTTP request timeout
+  post-process:
+    worker-interval-ms: 2000
+    batch-size: 10
+    max-attempts: 5
+    retry-backoff-seconds: 60
+    stale-running-minutes: 30
+  subtitle:
+    default-language: zh-CN
+    user-agent: MediaManager/1.0
+    opensubtitles:
+      base-url: https://api.opensubtitles.com/api/v1
 
 # SpringDoc
 springdoc:

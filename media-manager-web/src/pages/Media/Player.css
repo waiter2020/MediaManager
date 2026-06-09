@@ -122,6 +122,21 @@
   color: rgba(226, 232, 240, 0.72);
 }
 
+.player-subtitle-select.ant-select {
+  min-width: 160px;
+}
+
+.player-subtitle-select .ant-select-selector {
+  color: rgba(226, 232, 240, 0.88) !important;
+  background: rgba(9, 13, 24, 0.68) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+}
+
+.player-subtitle-select .ant-select-arrow {
+  color: rgba(226, 232, 240, 0.72);
+}
+
 .player-playback-badge {
   display: inline-flex;
   align-items: center;

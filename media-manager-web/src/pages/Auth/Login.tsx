@@ -1,15 +1,22 @@
-import { LoginForm, ProFormText } from '@ant-design/pro-components';
+import { LoginForm, ProFormCheckbox, ProFormText } from '@ant-design/pro-components';
 import { LockOutlined, LoginOutlined, UserOutlined } from '@ant-design/icons';
 import { history, useModel } from '@umijs/max';
 import { message } from 'antd';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { login } from '@/services/auth';
-import { setSessionTokens } from '@/utils/authSession';
+import {
+  getAccessToken,
+  getRememberedUsername,
+  isRememberLogin,
+  setRememberedUsername,
+  setSessionTokens,
+} from '@/utils/authSession';
 import AuthLayout from './AuthLayout';
 
 interface LoginValues {
   username: string;
   password: string;
+  remember?: boolean;
 }
 
 interface InitialState {
@@ -19,14 +26,23 @@ interface InitialState {
 }
 
 const Login: React.FC = () => {
-  const { setInitialState } = useModel('@@initialState');
+  const { initialState, setInitialState } = useModel('@@initialState');
+
+  useEffect(() => {
+    if (initialState?.isLogin || getAccessToken()) {
+      history.replace('/');
+    }
+  }, [initialState?.isLogin]);
 
   const handleSubmit = async (values: LoginValues) => {
+    const remember = values.remember ?? true;
+
     try {
       const res = await login(values);
       if (res.code === 200) {
         const { accessToken, refreshToken, user } = res.data;
-        setSessionTokens({ accessToken, refreshToken });
+        setSessionTokens({ accessToken, refreshToken }, { remember });
+        setRememberedUsername(remember ? values.username : null);
         message.success('登录成功');
         await setInitialState((s: InitialState | undefined) => ({
           ...s,
@@ -74,6 +90,10 @@ const Login: React.FC = () => {
       <LoginForm
         className="auth-form"
         contentStyle={{ width: '100%', minWidth: 0 }}
+        initialValues={{
+          username: getRememberedUsername() ?? '',
+          remember: isRememberLogin(),
+        }}
         submitter={{
           searchConfig: { submitText: '登录' },
           submitButtonProps: {
@@ -104,6 +124,14 @@ const Login: React.FC = () => {
           placeholder="密码"
           rules={[{ required: true, message: '请输入密码' }]}
         />
+        <ProFormCheckbox
+          name="remember"
+          fieldProps={{
+            'data-testid': 'login-remember',
+          }}
+        >
+          记住我
+        </ProFormCheckbox>
       </LoginForm>
     </AuthLayout>
   );

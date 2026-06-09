@@ -6,6 +6,7 @@ import com.mediamanager.media.dto.ClassifyBatchRequest;
 import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.dto.MediaItemDetailResponse;
 import com.mediamanager.media.dto.MediaSubtitleDto;
+import com.mediamanager.media.dto.SubtitleDownloadRequest;
 import com.mediamanager.media.dto.SubtitleSearchResultDto;
 import com.mediamanager.metadata.dto.IdentifyRequest;
 import com.mediamanager.metadata.dto.SeasonDto;
@@ -101,8 +102,23 @@ public class MediaItemController {
     public ApiResponse<List<SubtitleSearchResultDto>> searchOnlineSubtitles(
             @PathVariable Integer id,
             @RequestParam(required = false) String q,
-            @RequestParam(required = false) String language) {
-        return ApiResponse.success(subtitleService.searchOnlineSubtitles(id, q, language));
+            @RequestParam(required = false) String language,
+            @RequestParam(required = false) Integer fileId) {
+        return ApiResponse.success(subtitleService.searchOnlineSubtitles(id, q, language, fileId));
+    }
+
+    @PostMapping("/{id}/subtitles/download")
+    @PreAuthorize("hasAuthority('media:view')")
+    @Operation(summary = "Download and attach an online subtitle")
+    public ApiResponse<MediaSubtitleDto> downloadSubtitle(
+            @PathVariable Integer id,
+            @Valid @RequestBody SubtitleDownloadRequest request) {
+        return ApiResponse.success(subtitleService.downloadAndAttachSubtitle(
+                id,
+                request.getProvider(),
+                request.getExternalId(),
+                request.getFileId(),
+                request.getLanguage()));
     }
 
     @PostMapping("/{id}/seasons/sync")

@@ -77,16 +77,17 @@ public class MediaCollectionService {
     }
 
     @Transactional(readOnly = true)
-    public PageResult<MediaItemResponse> getCollectionItems(Integer id, int page, int size) {
+    public PageResult<MediaItemResponse> getCollectionItems(
+            Integer id, int page, int size, String sortField, String sortOrder) {
         MediaCollection collection = requireCollection(id);
         assertCanViewCollection(collection);
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), 100);
 
         if (Boolean.TRUE.equals(collection.getSmart())) {
-            return smartItemsPage(collection, safePage, safeSize);
+            return smartItemsPage(collection, safePage, safeSize, sortField, sortOrder);
         }
-        return manualItemsPage(collection, safePage, safeSize);
+        return manualItemsPage(collection, safePage, safeSize, sortField, sortOrder);
     }
 
     @Transactional
@@ -203,9 +204,14 @@ public class MediaCollectionService {
             itemCount = smartItemCount(collection);
             firstItem = smartCoverItem(collection);
         } else if (!includeItems && !smart) {
-            Page<MediaItem> summaryPage = manualItemPage(collection, PageRequest.of(0, 1));
+            Page<MediaCollectionItem> summaryPage = manualCollectionItemPage(
+                    collection,
+                    PageRequest.of(0, 1, resolveManualSort(null, null)));
             visibleItems = List.of();
-            firstItem = summaryPage.getContent().stream().findFirst().orElse(null);
+            firstItem = summaryPage.getContent().stream()
+                    .map(MediaCollectionItem::getMediaItem)
+                    .findFirst()
+                    .orElse(null);
             itemCount = summaryPage.getTotalElements();
         } else {
             visibleItems = visibleMediaItems(collection);
@@ -260,26 +266,31 @@ public class MediaCollectionService {
                 .collect(Collectors.toList());
     }
 
-    private PageResult<MediaItemResponse> manualItemsPage(MediaCollection collection, int page, int size) {
-        Page<MediaItem> itemPage = manualItemPage(collection, PageRequest.of(page - 1, size));
+    private PageResult<MediaItemResponse> manualItemsPage(
+            MediaCollection collection, int page, int size, String sortField, String sortOrder) {
+        Page<MediaCollectionItem> itemPage = manualCollectionItemPage(
+                collection, PageRequest.of(page - 1, size, resolveManualSort(sortField, sortOrder)));
         List<MediaItemResponse> items = itemPage.getContent().stream()
+                .map(MediaCollectionItem::getMediaItem)
                 .map(mediaItemService::toResponsePublic)
                 .collect(Collectors.toList());
         return PageResult.of(items, itemPage.getTotalElements(), page, size);
     }
 
-    private Page<MediaItem> manualItemPage(MediaCollection collection, PageRequest pageRequest) {
+    private Page<MediaCollectionItem> manualCollectionItemPage(MediaCollection collection, PageRequest pageRequest) {
         Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
         if (viewableLibraryIds.isEmpty()) {
             return Page.empty(pageRequest);
         }
-        return collectionItemRepository.findVisibleMediaItems(collection.getId(), viewableLibraryIds, pageRequest);
+        return collectionItemRepository.findVisibleCollectionItems(collection.getId(), viewableLibraryIds, pageRequest);
     }
 
-    private PageResult<MediaItemResponse> smartItemsPage(MediaCollection collection, int page, int size) {
+    private PageResult<MediaItemResponse> smartItemsPage(
+            MediaCollection collection, int page, int size, String sortField, String sortOrder) {
         MediaCollectionRuleDto rule = readRule(collection);
+        Sort sort = resolveSmartItemSort(rule, sortField, sortOrder);
         if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
-            List<MediaItem> items = smartItems(collection);
+            List<MediaItem> items = smartItems(collection, sort);
             int fromIndex = Math.min((page - 1) * size, items.size());
             int toIndex = Math.min(fromIndex + size, items.size());
             List<MediaItemResponse> responses = items.subList(fromIndex, toIndex).stream()
@@ -296,7 +307,6 @@ public class MediaCollectionService {
 
         int limit = normalizeLimit(rule.getLimit());
         Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
-        Sort sort = resolveRuleSort(rule.getSortField(), rule.getSortOrder());
         Page<MediaItem> itemPage = mediaItemRepository.findAll(
                 spec,
                 PageRequest.of(page - 1, size, sort));
@@ -313,6 +323,11 @@ public class MediaCollectionService {
 
     private List<MediaItem> smartItems(MediaCollection collection) {
         MediaCollectionRuleDto rule = readRule(collection);
+        return smartItems(collection, resolveRuleSort(rule.getSortField(), rule.getSortOrder()));
+    }
+
+    private List<MediaItem> smartItems(MediaCollection collection, Sort sort) {
+        MediaCollectionRuleDto rule = readRule(collection);
         Set<Integer> viewableLibraryIds = libraryAccessService.getViewableLibraryIds(securityCurrentUser.getCurrentUser());
         Set<Integer> libraryIds = resolveRuleLibraryIds(rule, viewableLibraryIds);
         if (libraryIds.isEmpty()) {
@@ -320,7 +335,6 @@ public class MediaCollectionService {
         }
         int limit = normalizeLimit(rule.getLimit());
         Specification<MediaItem> spec = buildSmartSpecification(rule, libraryIds);
-        Sort sort = resolveRuleSort(rule.getSortField(), rule.getSortOrder());
 
         List<MediaItem> items;
         if (Boolean.TRUE.equals(rule.getUnwatchedOnly())) {
@@ -428,8 +442,34 @@ public class MediaCollectionService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    private Sort resolveRuleSort(String sortField, String sortOrder) {
-        Sort.Direction direction = "ASC".equalsIgnoreCase(sortOrder) ? Sort.Direction.ASC : Sort.Direction.DESC;
+    private Sort resolveManualSort(String sortField, String sortOrder) {
+        if (sortField == null || sortField.isBlank() || "position".equalsIgnoreCase(sortField)) {
+            return Sort.by(Sort.Direction.ASC, "position").and(Sort.by(Sort.Direction.ASC, "createdAt"));
+        }
+        return resolveCollectionItemMediaSort(sortField, sortOrder);
+    }
+
+    private Sort resolveSmartItemSort(MediaCollectionRuleDto rule, String sortField, String sortOrder) {
+        if (sortField != null && !sortField.isBlank()) {
+            return resolveItemSort(sortField, sortOrder);
+        }
+        return resolveRuleSort(rule.getSortField(), rule.getSortOrder());
+    }
+
+    private Sort resolveCollectionItemMediaSort(String sortField, String sortOrder) {
+        Sort.Direction direction = "asc".equalsIgnoreCase(sortOrder) ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String field = switch (sortField == null ? "" : sortField) {
+            case "title" -> "mediaItem.title";
+            case "releaseDate" -> "mediaItem.releaseDate";
+            case "rating" -> "mediaItem.rating";
+            case "updatedAt" -> "mediaItem.updatedAt";
+            default -> "mediaItem.createdAt";
+        };
+        return Sort.by(direction, field);
+    }
+
+    private Sort resolveItemSort(String sortField, String sortOrder) {
+        Sort.Direction direction = "asc".equalsIgnoreCase(sortOrder) ? Sort.Direction.ASC : Sort.Direction.DESC;
         String field = switch (sortField == null ? "" : sortField) {
             case "title" -> "title";
             case "releaseDate" -> "releaseDate";
@@ -438,6 +478,10 @@ public class MediaCollectionService {
             default -> "createdAt";
         };
         return Sort.by(direction, field);
+    }
+
+    private Sort resolveRuleSort(String sortField, String sortOrder) {
+        return resolveItemSort(sortField, sortOrder);
     }
 
     private MediaCollectionRuleDto readRule(MediaCollection collection) {

@@ -10,7 +10,11 @@ public interface SubtitleSearchProvider {
 
     String id();
 
+    boolean isConfigured();
+
     List<SubtitleSearchResultDto> search(SearchContext context);
+
+    byte[] download(String externalId);
 
     record SearchContext(
             MediaItem mediaItem,

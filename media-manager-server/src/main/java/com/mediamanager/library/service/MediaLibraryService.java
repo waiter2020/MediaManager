@@ -2,6 +2,8 @@ package com.mediamanager.library.service;
 
 import com.mediamanager.common.exception.BusinessException;
 import com.mediamanager.common.exception.ErrorCode;
+import com.mediamanager.library.dto.LibraryScanOptions;
+import com.mediamanager.library.dto.LibraryScanRequest;
 import com.mediamanager.library.dto.MediaLibraryCreateRequest;
 import com.mediamanager.library.dto.MediaLibraryResponse;
 import com.mediamanager.library.dto.MediaLibraryUpdateRequest;
@@ -282,12 +284,12 @@ public class MediaLibraryService {
     }
 
     @Transactional
-    public void triggerScan(Integer id) {
+    public void triggerScan(Integer id, LibraryScanRequest request) {
         libraryAccessService.assertCanScanLibrary(id);
         if (!libraryRepository.existsById(id)) {
             throw new BusinessException(ErrorCode.LIBRARY_NOT_FOUND);
         }
-        scanService.scanLibraryAsync(id);
+        scanService.scanLibraryAsync(id, LibraryScanOptions.from(request));
     }
 
     public Map<String, Object> getLibraryStats(Integer id) {

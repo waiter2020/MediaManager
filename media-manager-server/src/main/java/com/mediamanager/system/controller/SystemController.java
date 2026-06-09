@@ -6,7 +6,9 @@ import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.library.dto.ScanProgressDTO;
 import com.mediamanager.library.repository.MediaLibraryRepository;
 import com.mediamanager.library.service.LibraryScanService;
+import com.mediamanager.media.dto.PostProcessStatsDto;
 import com.mediamanager.media.repository.MediaItemRepository;
+import com.mediamanager.media.service.MediaPostProcessQueueService;
 import com.mediamanager.system.dto.SystemLogEventDto;
 import com.mediamanager.system.repository.SysConfigRepository;
 import com.mediamanager.system.repository.SysUserRepository;
@@ -44,6 +46,7 @@ public class SystemController {
     private final com.mediamanager.system.service.SysConfigService sysConfigService;
     private final com.mediamanager.system.service.SystemCapabilitiesService capabilitiesService;
     private final HardwareAccelerationService hardwareAccelerationService;
+    private final MediaPostProcessQueueService postProcessQueueService;
 
     @GetMapping("/status")
     @Operation(summary = "Get system status")
@@ -184,6 +187,13 @@ public class SystemController {
         info.put("audioCount", mediaItemRepository.countByTypeAndHiddenFalse("AUDIO"));
         info.put("tagCount", tagRepository.count());
         return ApiResponse.success(info);
+    }
+
+    @GetMapping("/post-process/stats")
+    @PreAuthorize("hasAuthority('system:manage')")
+    @Operation(summary = "Get persistent post-process queue statistics")
+    public ApiResponse<PostProcessStatsDto> getPostProcessStats() {
+        return ApiResponse.success(postProcessQueueService.stats());
     }
 
     @GetMapping("/logs/recent")

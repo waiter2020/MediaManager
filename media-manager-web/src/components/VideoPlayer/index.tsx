@@ -15,6 +15,7 @@ export interface VideoPlayerProps {
   autoplay?: boolean;
   fill?: boolean;
   subtitles?: VideoSubtitleTrack[];
+  activeSubtitleIndex?: number | null;
   startTime?: number;
   mediaStartOffset?: number;
   onSeekRequest?: (absoluteSeconds: number) => void;
@@ -24,10 +25,28 @@ export interface VideoPlayerProps {
 }
 
 export interface VideoSubtitleTrack {
+  id?: number;
   src: string;
   label?: string;
   language?: string;
   defaultTrack?: boolean;
+}
+
+function applySubtitleSelection(
+  video: HTMLVideoElement | null,
+  trackCount: number,
+  activeSubtitleIndex: number | null | undefined,
+) {
+  if (!video?.textTracks || trackCount <= 0) {
+    return;
+  }
+  for (let i = 0; i < video.textTracks.length; i += 1) {
+    if (activeSubtitleIndex == null) {
+      video.textTracks[i].mode = 'disabled';
+    } else {
+      video.textTracks[i].mode = i === activeSubtitleIndex ? 'showing' : 'disabled';
+    }
+  }
 }
 
 type PlayerWithControls = Player & {
@@ -59,6 +78,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   autoplay = true,
   fill = false,
   subtitles = [],
+  activeSubtitleIndex,
   startTime = 0,
   mediaStartOffset = 0,
   onSeekRequest,
@@ -213,12 +233,16 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           track.dataset.mediamanagerSubtitle = 'true';
           video.appendChild(track);
         });
-        const textTracks = video.textTracks;
-        if (textTracks && textTracks.length > 0) {
-          for (let i = 0; i < textTracks.length; i += 1) {
-            textTracks[i].mode = subtitles[i]?.defaultTrack || i === 0 ? 'showing' : 'disabled';
-          }
-        }
+        const defaultIndex = subtitles.findIndex((track) => track.defaultTrack);
+        const resolvedIndex =
+          activeSubtitleIndex != null
+            ? activeSubtitleIndex
+            : defaultIndex >= 0
+              ? defaultIndex
+              : subtitles.length > 0
+                ? 0
+                : null;
+        applySubtitleSelection(video, subtitles.length, resolvedIndex);
       };
       attachSubtitles();
       player.once('loadedmetadata', attachSubtitles);
@@ -336,7 +360,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       playerRef.current = null;
     };
-  }, [src, mode, poster, effectiveAutoplay, fill, subtitles, startTime, mediaStartOffset, onSeekRequest]);
+  }, [src, mode, poster, effectiveAutoplay, fill, subtitles, activeSubtitleIndex, startTime, mediaStartOffset, onSeekRequest]);
+
+  useEffect(() => {
+    const video = containerRef.current?.querySelector('video');
+    applySubtitleSelection(video, subtitles.length, activeSubtitleIndex);
+  }, [activeSubtitleIndex, subtitles.length]);
 
   return (
     <div

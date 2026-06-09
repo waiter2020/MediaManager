@@ -58,10 +58,20 @@ export async function getCollection(id: number, includeItems = true) {
   });
 }
 
-export async function getCollectionItems(id: number, page = 1, size = 30) {
+export async function getCollectionItems(
+  id: number,
+  page = 1,
+  size = 30,
+  sortField?: string,
+  sortOrder?: 'asc' | 'desc',
+) {
   return request<ApiResponse<PageResult<MediaItem>>>(`/api/v1/collections/${id}/items`, {
     method: 'GET',
-    params: { page, size },
+    params: {
+      page,
+      size,
+      ...(sortField ? { sortField, sortOrder: sortOrder ?? 'desc' } : {}),
+    },
   });
 }
 

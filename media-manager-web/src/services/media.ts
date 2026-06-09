@@ -102,10 +102,25 @@ export async function getItemSubtitles(id: number) {
   return request<ApiResponse<MediaSubtitle[]>>(`/api/v1/items/${id}/subtitles`, { method: 'GET' });
 }
 
-export async function searchOnlineSubtitles(id: number, q?: string, language?: string) {
+export async function searchOnlineSubtitles(
+  id: number,
+  q?: string,
+  language?: string,
+  fileId?: number,
+) {
   return request<ApiResponse<SubtitleSearchResult[]>>(`/api/v1/items/${id}/subtitles/search`, {
     method: 'GET',
-    params: { q, language },
+    params: { q, language, fileId },
+  });
+}
+
+export async function downloadSubtitle(
+  id: number,
+  data: { provider: string; externalId: string; fileId?: number; language?: string },
+) {
+  return request<ApiResponse<MediaSubtitle>>(`/api/v1/items/${id}/subtitles/download`, {
+    method: 'POST',
+    data,
   });
 }
 

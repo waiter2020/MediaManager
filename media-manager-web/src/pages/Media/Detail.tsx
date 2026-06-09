@@ -28,7 +28,6 @@ import {
   EyeOutlined,
   FileOutlined,
   FileTextOutlined,
-  GlobalOutlined,
   HddOutlined,
   HeartFilled,
   HeartOutlined,
@@ -54,11 +53,10 @@ import {
   getItemSeasons,
   getSimilarItems,
   refreshMetadata,
-  searchOnlineSubtitles,
   syncTvSeasons,
   updateMetadata,
-  type SubtitleSearchResult,
 } from '@/services/media';
+import SubtitleSearchModal from '@/components/SubtitleSearchModal';
 import {
   getChapterThumbnailUrl,
   getFileStreamUrl,
@@ -267,10 +265,6 @@ const MediaDetail: React.FC = () => {
   const [similarLoading, setSimilarLoading] = useState(false);
   const [seasonSyncing, setSeasonSyncing] = useState(false);
   const [subtitleSearchVisible, setSubtitleSearchVisible] = useState(false);
-  const [subtitleSearchQuery, setSubtitleSearchQuery] = useState('');
-  const [subtitleLanguage, setSubtitleLanguage] = useState('zh-CN');
-  const [subtitleSearchLoading, setSubtitleSearchLoading] = useState(false);
-  const [subtitleResults, setSubtitleResults] = useState<SubtitleSearchResult[]>([]);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const numericId = Number(id);
@@ -501,26 +495,13 @@ const MediaDetail: React.FC = () => {
   };
 
   const handleOpenSubtitleSearch = () => {
-    setSubtitleSearchQuery(data?.title || '');
-    setSubtitleResults([]);
     setSubtitleSearchVisible(true);
   };
 
-  const handleSearchSubtitles = async () => {
-    setSubtitleSearchLoading(true);
-    try {
-      const res = await searchOnlineSubtitles(numericId, subtitleSearchQuery || data?.title, subtitleLanguage);
-      if (res.code === 200) {
-        const results = res.data || [];
-        setSubtitleResults(results);
-        if (results.length === 0) {
-          message.info('暂无在线字幕结果，请确认已配置字幕搜索提供方');
-        }
-      } else {
-        message.error(res.message || '字幕搜索失败');
-      }
-    } finally {
-      setSubtitleSearchLoading(false);
+  const handleSubtitleDownloaded = async () => {
+    const res = await getItemDetail(numericId);
+    if (res.code === 200 && res.data) {
+      setData(res.data);
     }
   };
 
@@ -1013,57 +994,13 @@ const MediaDetail: React.FC = () => {
         </div>
       </Modal>
 
-      <Modal
-        title="在线字幕搜索"
+      <SubtitleSearchModal
+        itemId={numericId}
+        defaultQuery={data.title}
         open={subtitleSearchVisible}
-        onCancel={() => setSubtitleSearchVisible(false)}
-        footer={null}
-        width={640}
-      >
-        <div className="subtitle-search-form">
-          <Input
-            prefix={<GlobalOutlined />}
-            placeholder="影片名、剧集名或文件名"
-            value={subtitleSearchQuery}
-            onChange={(event) => setSubtitleSearchQuery(event.target.value)}
-            onPressEnter={handleSearchSubtitles}
-          />
-          <Input
-            className="subtitle-language-input"
-            value={subtitleLanguage}
-            onChange={(event) => setSubtitleLanguage(event.target.value)}
-            placeholder="语言"
-          />
-          <Button type="primary" icon={<SearchOutlined />} loading={subtitleSearchLoading} onClick={handleSearchSubtitles}>
-            搜索
-          </Button>
-        </div>
-        <div className="subtitle-search-results">
-          {subtitleResults.length === 0 ? (
-            <div className="detail-empty-line">暂无搜索结果</div>
-          ) : (
-            subtitleResults.map((result) => (
-              <div key={`${result.provider}-${result.externalId}-${result.title}`} className="detail-subtitle-row">
-                <GlobalOutlined className="subtitle-row-icon" />
-                <div className="subtitle-row-main">
-                  <div className="subtitle-row-title">{result.title || result.releaseName || result.externalId}</div>
-                  <div className="subtitle-row-meta">
-                    {result.provider && <span>{result.provider}</span>}
-                    {result.language && <span>{result.language}</span>}
-                    {result.format && <span>{result.format.toUpperCase()}</span>}
-                    {result.score != null && <span>{result.score.toFixed(1)}</span>}
-                  </div>
-                </div>
-                {result.downloadUrl && (
-                  <Button size="small" onClick={() => window.open(result.downloadUrl, '_blank')}>
-                    打开
-                  </Button>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </Modal>
+        onClose={() => setSubtitleSearchVisible(false)}
+        onDownloaded={handleSubtitleDownloaded}
+      />
     </div>
   );
 };

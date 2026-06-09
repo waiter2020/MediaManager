@@ -11,6 +11,7 @@ import {
 import { history, useAccess, useModel } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
 import HorizontalMediaRow from '@/components/HorizontalMediaRow';
+import { PC_HORIZONTAL_ROW_AUTOPLAY_PROPS } from '@/constants/mediaPreview';
 import SystemCapabilitiesCard from '@/components/SystemCapabilitiesCard';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { getDiscover } from '@/services/discover';
@@ -170,8 +171,7 @@ const Dashboard: React.FC = () => {
             viewAllLink="/discover"
             playMode="resume"
             loading={loading}
-            autoCarousel
-            thumbnailPreviewMode="always"
+            {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
           />
         )}
         <div className="recent-section">
@@ -180,8 +180,7 @@ const Dashboard: React.FC = () => {
             items={recentItems}
             viewAllLink="/browse"
             loading={loading}
-            autoCarousel
-            thumbnailPreviewMode="always"
+            {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
           />
         </div>
 
@@ -194,8 +193,7 @@ const Dashboard: React.FC = () => {
                 items={row.items}
                 viewAllLink={`/browse?libraryId=${row.library.id}`}
                 loading={loading}
-                autoCarousel
-                thumbnailPreviewMode="always"
+                {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
               />
             ))}
           </div>

@@ -36,6 +36,7 @@ test.describe('MediaManager smoke', () => {
     await page.goto('/login');
     await expect(page.getByTestId('login-username')).toBeVisible();
     await expect(page.getByTestId('login-password')).toBeVisible();
+    await expect(page.getByTestId('login-remember')).toBeVisible();
     await expect(page.getByRole('button', { name: '登录' })).toBeVisible();
   });
 

@@ -13,6 +13,7 @@ import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.repository.MediaSubtitleRepository;
 import com.mediamanager.media.spi.SubtitleSearchProvider;
 import com.mediamanager.system.service.LibraryAccessService;
+import com.mediamanager.system.service.SysConfigService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ByteArrayResource;
@@ -67,6 +68,7 @@ public class MediaSubtitleService {
     private final LibraryAccessService libraryAccessService;
     private final StoragePathMapper storagePathMapper;
     private final List<SubtitleSearchProvider> searchProviders;
+    private final SysConfigService sysConfigService;
 
     @Transactional(readOnly = true)
     public List<MediaSubtitleDto> getSubtitlesForItem(Integer itemId) {
@@ -89,22 +91,25 @@ public class MediaSubtitleService {
     }
 
     @Transactional(readOnly = true)
-    public List<SubtitleSearchResultDto> searchOnlineSubtitles(Integer itemId, String query, String language) {
+    public List<SubtitleSearchResultDto> searchOnlineSubtitles(
+            Integer itemId, String query, String language, Integer fileId) {
         MediaItem item = itemRepository.findById(itemId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
         libraryAccessService.assertCanViewItem(item);
-        if (searchProviders == null || searchProviders.isEmpty()) {
+        if (searchProviders == null || searchProviders.isEmpty()
+                || searchProviders.stream().noneMatch(SubtitleSearchProvider::isConfigured)) {
             return List.of();
         }
-        MediaFile primaryFile = fileRepository.findByMediaItemIdAndDeletedFalse(itemId).stream()
-                .findFirst()
-                .orElse(null);
+        MediaFile primaryFile = resolveMediaFile(itemId, fileId);
+        String resolvedLanguage = language != null && !language.isBlank()
+                ? language
+                : sysConfigService.subtitleDefaultLanguage();
         String resolvedQuery = query != null && !query.isBlank() ? query : item.getTitle();
         if (resolvedQuery == null || resolvedQuery.isBlank()) {
             resolvedQuery = item.getOriginalTitle();
         }
         SubtitleSearchProvider.SearchContext context =
-                new SubtitleSearchProvider.SearchContext(item, primaryFile, resolvedQuery, language);
+                new SubtitleSearchProvider.SearchContext(item, primaryFile, resolvedQuery, resolvedLanguage);
         List<SubtitleSearchResultDto> results = new ArrayList<>();
         for (SubtitleSearchProvider provider : searchProviders) {
             try {
@@ -120,6 +125,71 @@ public class MediaSubtitleService {
                 .sorted(Comparator.comparing(SubtitleSearchResultDto::getScore,
                         Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
+    }
+
+    @Transactional
+    public MediaSubtitleDto downloadAndAttachSubtitle(
+            Integer itemId, String providerId, String externalId, Integer fileId, String language) {
+        MediaItem item = itemRepository.findById(itemId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
+        libraryAccessService.assertCanViewItem(item);
+        SubtitleSearchProvider provider = findProvider(providerId);
+        MediaFile mediaFile = resolveMediaFile(itemId, fileId);
+        if (mediaFile == null) {
+            throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND, "No media file found for subtitle download");
+        }
+        byte[] payload = provider.download(externalId);
+        if (payload == null || payload.length == 0) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR.getCode(), "Downloaded subtitle is empty");
+        }
+        Path mediaPath = Path.of(storagePathMapper.mapPathIfNeeded(mediaFile.getFilePath()));
+        if (!Files.isRegularFile(mediaPath)) {
+            throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND, "Media file not found on disk");
+        }
+        Path parent = mediaPath.getParent();
+        if (parent == null) {
+            throw new BusinessException(ErrorCode.FILE_SYSTEM_ERROR, "Cannot resolve media parent directory");
+        }
+        String mediaBaseName = getBaseName(mediaPath.getFileName().toString());
+        String lang = language != null && !language.isBlank() ? language : sysConfigService.subtitleDefaultLanguage();
+        String safeLang = lang.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safeLang.isBlank()) {
+            safeLang = "und";
+        }
+        String format = detectSubtitleFormat(payload);
+        String fileName = mediaBaseName + "." + safeLang + ".opensubtitles." + format;
+        Path targetPath = parent.resolve(fileName);
+        int suffix = 1;
+        while (Files.exists(targetPath)) {
+            fileName = mediaBaseName + "." + safeLang + ".opensubtitles." + suffix + "." + format;
+            targetPath = parent.resolve(fileName);
+            suffix += 1;
+        }
+        try {
+            Files.write(targetPath, payload);
+            BasicFileAttributes attrs = Files.readAttributes(targetPath, BasicFileAttributes.class);
+            MediaSubtitle subtitle = subtitleRepository.findByFilePath(normalizePath(targetPath.toString()))
+                    .orElseGet(MediaSubtitle::new);
+            subtitle.setMediaItem(item);
+            subtitle.setMediaFile(mediaFile);
+            subtitle.setFilePath(normalizePath(targetPath.toAbsolutePath().toString()));
+            subtitle.setFileName(fileName);
+            subtitle.setFormat(format);
+            subtitle.setLanguage(lang);
+            subtitle.setTitle(buildSubtitleTitle(lang, false));
+            subtitle.setSource("ONLINE");
+            subtitle.setProvider(provider.id());
+            subtitle.setExternalId(externalId);
+            subtitle.setFileSize(attrs.size());
+            subtitle.setFileModifiedAt(attrs.lastModifiedTime().toInstant());
+            subtitle.setForced(false);
+            if (subtitle.getDefaultTrack() == null) {
+                subtitle.setDefaultTrack(false);
+            }
+            return toDto(subtitleRepository.save(subtitle));
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.FILE_SYSTEM_ERROR, "Failed to save subtitle: " + e.getMessage());
+        }
     }
 
     @Transactional(readOnly = true)
@@ -520,5 +590,39 @@ public class MediaSubtitleService {
 
     private static String normalizePath(String path) {
         return path == null ? null : path.replace('\\', '/');
+    }
+
+    private MediaFile resolveMediaFile(Integer itemId, Integer fileId) {
+        if (fileId != null) {
+            return fileRepository.findByIdWithItemAndLibrary(fileId)
+                    .filter(file -> file.getMediaItem() != null && itemId.equals(file.getMediaItem().getId()))
+                    .filter(file -> !Boolean.TRUE.equals(file.getDeleted()))
+                    .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND));
+        }
+        return fileRepository.findByMediaItemIdAndDeletedFalse(itemId).stream()
+                .findFirst()
+                .orElse(null);
+    }
+
+    private SubtitleSearchProvider findProvider(String providerId) {
+        if (providerId == null || providerId.isBlank()) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "provider is required");
+        }
+        return searchProviders.stream()
+                .filter(provider -> providerId.equalsIgnoreCase(provider.id()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_PARAMETER,
+                        "Unknown subtitle provider: " + providerId));
+    }
+
+    private static String detectSubtitleFormat(byte[] payload) {
+        String prefix = new String(payload, 0, Math.min(payload.length, 64), StandardCharsets.UTF_8).trim();
+        if (prefix.startsWith("WEBVTT")) {
+            return "vtt";
+        }
+        if (prefix.startsWith("[Script Info]")) {
+            return "ass";
+        }
+        return "srt";
     }
 }

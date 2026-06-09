@@ -81,6 +81,7 @@ export default defineConfig({
       icon: 'AppstoreAddOutlined',
       access: 'canViewMedia',
     },
+    { path: '/collections/:id', component: './Collections/Detail', access: 'canViewMedia' },
     {
       name: '媒体库',
       path: '/libraries',

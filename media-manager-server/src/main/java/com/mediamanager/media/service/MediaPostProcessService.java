@@ -10,7 +10,6 @@ import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.repository.MediaFileRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -27,6 +26,7 @@ public class MediaPostProcessService {
     private final MediaFileRepository fileRepository;
     private final ThumbnailService thumbnailService;
     private final MediaChapterService mediaChapterService;
+    private final MediaPostProcessQueueService postProcessQueueService;
 
     public MediaPostProcessService(
             @Lazy ClassificationEngine classificationEngine,
@@ -36,7 +36,8 @@ public class MediaPostProcessService {
             MediaItemRepository mediaItemRepository,
             MediaFileRepository fileRepository,
             ThumbnailService thumbnailService,
-            MediaChapterService mediaChapterService) {
+            MediaChapterService mediaChapterService,
+            MediaPostProcessQueueService postProcessQueueService) {
         this.classificationEngine = classificationEngine;
         this.aiOrchestrator = aiOrchestrator;
         this.embeddingIndexService = embeddingIndexService;
@@ -45,6 +46,7 @@ public class MediaPostProcessService {
         this.fileRepository = fileRepository;
         this.thumbnailService = thumbnailService;
         this.mediaChapterService = mediaChapterService;
+        this.postProcessQueueService = postProcessQueueService;
     }
 
     public void afterMetadataUpdated(MediaItem item) {
@@ -55,14 +57,13 @@ public class MediaPostProcessService {
             }
             mediaChapterService.ensureChaptersForItem(item);
             MediaItem processedItem = classificationEngine.executeClassification(item);
-            if (processedItem.getOverview() == null || processedItem.getOverview().isBlank()) {
-                aiOrchestrator.completeMetadataAsync(processedItem.getId());
-            }
+            aiOrchestrator.completeMetadataIfNeeded(processedItem);
             processedItem = ensurePosterThumbnail(processedItem);
             syncSearchIndexes(processedItem);
 
         } catch (Exception e) {
             log.warn("Post-process failed for item {}: {}", itemId, e.getMessage());
+            throw e;
         }
     }
 
@@ -120,8 +121,11 @@ public class MediaPostProcessService {
         embeddingIndexService.removeItem(itemId);
     }
 
-    @Async("postProcessExecutor")
     public void afterMetadataUpdatedAsync(Integer itemId) {
-        mediaItemRepository.findById(itemId).ifPresent(this::afterMetadataUpdated);
+        afterMetadataUpdatedAsync(itemId, "MANUAL");
+    }
+
+    public void afterMetadataUpdatedAsync(Integer itemId, String source) {
+        postProcessQueueService.enqueueItemFull(itemId, source);
     }
 }

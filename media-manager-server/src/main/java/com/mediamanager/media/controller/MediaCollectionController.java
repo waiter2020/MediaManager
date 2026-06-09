@@ -55,8 +55,10 @@ public class MediaCollectionController {
     public ApiResponse<PageResult<MediaItemResponse>> getCollectionItems(
             @PathVariable Integer id,
             @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "30") int size) {
-        return ApiResponse.success(collectionService.getCollectionItems(id, page, size));
+            @RequestParam(defaultValue = "30") int size,
+            @RequestParam(required = false) String sortField,
+            @RequestParam(defaultValue = "desc") String sortOrder) {
+        return ApiResponse.success(collectionService.getCollectionItems(id, page, size, sortField, sortOrder));
     }
 
     @PutMapping("/{id}")

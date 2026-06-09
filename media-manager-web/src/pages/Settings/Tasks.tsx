@@ -39,7 +39,8 @@ import {
   type ScrapeTaskPreviewResponse,
   type ScrapeTaskResponse,
 } from '@/services/scrape';
-import { cancelScan, getLibraries, triggerScan } from '@/services/library';
+import LibraryScanModal from '@/components/LibraryScanModal';
+import { cancelScan, getLibraries } from '@/services/library';
 import type { MediaLibrary } from '@/types/library';
 import type { ScanProgress } from '@/models/global';
 
@@ -115,7 +116,7 @@ const Tasks: React.FC = () => {
   const [scrapeTasks, setScrapeTasks] = useState<ScrapeTaskResponse[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [startingScrape, setStartingScrape] = useState(false);
-  const [startingScan, setStartingScan] = useState(false);
+  const [scanModalOpen, setScanModalOpen] = useState(false);
   const [libraries, setLibraries] = useState<Pick<MediaLibrary, 'id' | 'name'>[]>([]);
   const [selectedScanLibraryId, setSelectedScanLibraryId] = useState<number | undefined>();
   const [detailTask, setDetailTask] = useState<ScrapeTaskResponse | null>(null);
@@ -217,21 +218,12 @@ const Tasks: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [refreshPreview, watchedScope, watchedLibraryId, watchedTargetStatus, watchedMediaTypes]);
 
-  const handleStartScan = async () => {
+  const handleStartScan = () => {
     if (!selectedScanLibraryId) {
       message.warning('请选择媒体库');
       return;
     }
-    setStartingScan(true);
-    try {
-      const res = await triggerScan(selectedScanLibraryId);
-      if (res.code === 200) {
-        message.success('扫描任务已启动');
-        fetchScanSnapshot?.();
-      }
-    } finally {
-      setStartingScan(false);
-    }
+    setScanModalOpen(true);
   };
 
   const handleStartScrape = async () => {
@@ -451,8 +443,7 @@ const Tasks: React.FC = () => {
             />
             <Button
               type="primary"
-              icon={<SyncOutlined spin={startingScan} />}
-              loading={startingScan}
+              icon={<SyncOutlined />}
               disabled={!access.canScanLibrary}
               onClick={handleStartScan}
             >
@@ -625,6 +616,14 @@ const Tasks: React.FC = () => {
           </Descriptions>
         )}
       </Drawer>
+
+      <LibraryScanModal
+        open={scanModalOpen}
+        libraryId={selectedScanLibraryId}
+        libraryName={libraries.find((lib) => lib.id === selectedScanLibraryId)?.name}
+        onClose={() => setScanModalOpen(false)}
+        onSuccess={() => fetchScanSnapshot?.()}
+      />
     </PageContainer>
   );
 };

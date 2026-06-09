@@ -42,6 +42,24 @@ export interface MediaProcessingSettings {
 export interface IntegrationsSettings {
   tmdbApiKey: string;
   tmdbApiKeyConfigured: boolean;
+  opensubtitlesApiKey?: string;
+  opensubtitlesApiKeyConfigured?: boolean;
+  opensubtitlesUsername?: string;
+  opensubtitlesUsernameConfigured?: boolean;
+  opensubtitlesPassword?: string;
+  opensubtitlesPasswordConfigured?: boolean;
+  subtitleDefaultLanguage?: string;
+}
+
+export interface SubtitleProviderStatus {
+  id: string;
+  configured: boolean;
+  enabled: boolean;
+}
+
+export interface SubtitleSettings {
+  defaultLanguage: string;
+  providers: SubtitleProviderStatus[];
 }
 
 export interface AppearanceSettings {
@@ -106,10 +124,22 @@ export async function getIntegrationsSettings() {
   });
 }
 
-export async function updateIntegrationsSettings(data: { tmdbApiKey?: string }) {
+export async function updateIntegrationsSettings(data: {
+  tmdbApiKey?: string;
+  opensubtitlesApiKey?: string;
+  opensubtitlesUsername?: string;
+  opensubtitlesPassword?: string;
+  subtitleDefaultLanguage?: string;
+}) {
   return request<ApiResponse<IntegrationsSettings>>('/api/v1/system/settings/integrations', {
     method: 'PUT',
     data,
+  });
+}
+
+export async function getSubtitleSettings() {
+  return request<ApiResponse<SubtitleSettings>>('/api/v1/system/settings/subtitles', {
+    method: 'GET',
   });
 }
 

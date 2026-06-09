@@ -19,6 +19,7 @@ export default function access(initialState: { currentUser?: API.CurrentUser } |
     canDeleteMedia: has('media:delete'),
     canDeleteSourceFile: has('media:delete_file'),
     canScanLibrary: has('library:scan') || has('library:edit'),
+    canExecuteScrape: has('library:edit') || has('task:execute'),
     canEditLibraryPlugins: has('library:edit'),
     canDeleteLibrary: has('library:delete'),
     canViewRecycleBin: has('media:view'),

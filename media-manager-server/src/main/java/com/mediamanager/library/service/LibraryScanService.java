@@ -1,7 +1,9 @@
 package com.mediamanager.library.service;
 
 import com.mediamanager.common.service.StoragePathMapper;
+import com.mediamanager.library.dto.LibraryScanOptions;
 import com.mediamanager.library.dto.ScanProgressDTO;
+import com.mediamanager.metadata.service.ScrapeTaskService;
 import com.mediamanager.library.entity.LibraryPath;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.library.repository.MediaLibraryRepository;
@@ -38,6 +40,7 @@ public class LibraryScanService {
     private final MediaFileRepository mediaFileRepository;
     private final MediaFileLifecycleService mediaFileLifecycleService;
     private final StoragePathMapper storagePathMapper;
+    private final ScrapeTaskService scrapeTaskService;
 
     private final Map<Integer, ScanProgressDTO> activeScans = new ConcurrentHashMap<>();
     private final Map<Integer, Boolean> cancelledScans = new ConcurrentHashMap<>();
@@ -60,9 +63,21 @@ public class LibraryScanService {
         return Boolean.TRUE.equals(cancelledScans.get(libraryId));
     }
 
-    @Async
+    @Async("scanExecutor")
     public void scanLibraryAsync(Integer libraryId) {
-        log.info("Starting scan for library: {}", libraryId);
+        scanLibraryAsync(libraryId, LibraryScanOptions.defaults());
+    }
+
+    @Async("scanExecutor")
+    public void scanLibraryAsync(Integer libraryId, LibraryScanOptions options) {
+        LibraryScanOptions scanOptions = options != null ? options : LibraryScanOptions.defaults();
+        log.info(
+                "Starting scan for library: {} with options refreshMetadata={} scanMissingMetadata={} reconcileMissing={} scrapeAfterScan={}",
+                libraryId,
+                scanOptions.refreshMetadata(),
+                scanOptions.scanMissingMetadata(),
+                scanOptions.reconcileMissing(),
+                scanOptions.scrapeAfterScan());
         sseService.broadcast("scan-start", "Started scanning library ID: " + libraryId);
         SystemLogBroadcaster.getInstance().broadcast(SystemLogEventDto.builder()
                 .timestamp(System.currentTimeMillis())
@@ -151,7 +166,7 @@ public class LibraryScanService {
                 }
                 progress.setCurrentPath(path.getPath());
                 scanDirectory(library, path.getPath(), totalFiles, matchedFiles, newFiles,
-                        updatedFiles, restoredFiles, failedFiles, progress);
+                        updatedFiles, restoredFiles, failedFiles, progress, scanOptions);
             }
 
             if (isCancelled(libraryId)) {
@@ -173,7 +188,7 @@ public class LibraryScanService {
                 return;
             }
 
-            int missingFiles = reconcileMissingFiles(library);
+            int missingFiles = scanOptions.reconcileMissing() ? reconcileMissingFiles(library) : 0;
 
             updateLastScannedAt(libraryId);
 
@@ -200,6 +215,16 @@ public class LibraryScanService {
             broadcastRecentScanErrors(progress, libraryId);
 
             sseService.broadcast("library.updated", Map.of("libraryId", libraryId, "action", "scan_completed"));
+
+            if (scanOptions.scrapeAfterScan()) {
+                try {
+                    scrapeTaskService.startScrape(libraryId, "SCAN", scanOptions.scrapeTargetStatus());
+                    log.info("Triggered post-scan scrape for library {} targetStatus={}",
+                            libraryId, scanOptions.scrapeTargetStatus());
+                } catch (Exception e) {
+                    log.warn("Failed to trigger post-scan scrape for library {}: {}", libraryId, e.getMessage());
+                }
+            }
 
             if (matchedFiles.get() == 0 && totalFiles.get() > 0) {
                 String hint = String.format(
@@ -238,7 +263,7 @@ public class LibraryScanService {
         }
     }
 
-    @Async
+    @Async("scanExecutor")
     public void scanSpecificDirectoryAsync(String dirPathStr) {
         String resolvedDirPath = storagePathMapper.mapPathIfNeeded(dirPathStr);
         Path targetDir = Paths.get(resolvedDirPath);
@@ -279,10 +304,11 @@ public class LibraryScanService {
         AtomicInteger updated = new AtomicInteger(0);
         AtomicInteger restored = new AtomicInteger(0);
         AtomicInteger failed = new AtomicInteger(0);
+        LibraryScanOptions scanOptions = LibraryScanOptions.defaults();
         try {
             scanDirectory(lib, targetDir.toString(), total, matched, added,
-                    updated, restored, failed, progress);
-            int missing = reconcileMissingFiles(lib, targetDir);
+                    updated, restored, failed, progress, scanOptions);
+            int missing = scanOptions.reconcileMissing() ? reconcileMissingFiles(lib, targetDir) : 0;
             updateLastScannedAt(lib.getId());
             applyProgressCounts(progress, total, matched, added,
                     updated, restored, failed, new AtomicInteger(missing));
@@ -330,7 +356,8 @@ public class LibraryScanService {
     private void scanDirectory(MediaLibrary library, String directoryPath,
                                AtomicInteger totalFiles, AtomicInteger matchedFiles, AtomicInteger newFiles,
                                AtomicInteger updatedFiles, AtomicInteger restoredFiles, AtomicInteger failedFiles,
-                               ScanProgressDTO progress) {
+                               ScanProgressDTO progress, LibraryScanOptions scanOptions) {
+        LibraryScanOptions options = scanOptions != null ? scanOptions : LibraryScanOptions.defaults();
         String resolvedDirectoryPath = storagePathMapper.mapPathIfNeeded(directoryPath);
         Path startPath = Paths.get(resolvedDirectoryPath);
         if (!Files.exists(startPath) || !Files.isDirectory(startPath)) {
@@ -353,7 +380,7 @@ public class LibraryScanService {
 
                     FileScanProcessor.ScanResult scanResult;
                     try {
-                        scanResult = fileScanProcessor.scanFile(library, file, attrs);
+                        scanResult = fileScanProcessor.scanFile(library, file, attrs, options);
                     } catch (Exception e) {
                         log.error("Failed to scan file: {}", file, e);
                         scanResult = FileScanProcessor.ScanResult.failed(e);

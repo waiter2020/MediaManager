@@ -5,15 +5,11 @@ import { AppstoreAddOutlined } from '@ant-design/icons';
 import { history, useAccess } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
 import HorizontalMediaRow from '@/components/HorizontalMediaRow';
+import { PC_HORIZONTAL_ROW_AUTOPLAY_PROPS } from '@/constants/mediaPreview';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { getDiscover } from '@/services/discover';
 import type { MediaItem } from '@/types/media';
 import './index.css';
-
-const DISCOVER_ROW_AUTOPLAY_PROPS = {
-  autoCarousel: true,
-  thumbnailPreviewMode: 'always' as const,
-};
 
 const DiscoverPage: React.FC = () => {
   const access = useAccess();
@@ -74,7 +70,7 @@ const DiscoverPage: React.FC = () => {
           items={continueWatching}
           loading={loading}
           playMode="resume"
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {watchlist.length > 0 && (
@@ -82,7 +78,7 @@ const DiscoverPage: React.FC = () => {
           title="Watchlist"
           items={watchlist}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {recommended.length > 0 && (
@@ -90,7 +86,7 @@ const DiscoverPage: React.FC = () => {
           title="为你推荐"
           items={recommended}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {favorites.length > 0 && (
@@ -98,7 +94,7 @@ const DiscoverPage: React.FC = () => {
           title="最近收藏"
           items={favorites}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {topRated.length > 0 && (
@@ -106,7 +102,7 @@ const DiscoverPage: React.FC = () => {
           title="高分内容"
           items={topRated}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {unwatched.length > 0 && (
@@ -114,7 +110,7 @@ const DiscoverPage: React.FC = () => {
           title="还没看"
           items={unwatched}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {recentlyAdded.length > 0 && (
@@ -122,7 +118,7 @@ const DiscoverPage: React.FC = () => {
           title="最近添加"
           items={recentlyAdded}
           loading={loading}
-          {...DISCOVER_ROW_AUTOPLAY_PROPS}
+          {...PC_HORIZONTAL_ROW_AUTOPLAY_PROPS}
         />
       )}
       {empty && (

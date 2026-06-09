@@ -1,5 +1,6 @@
 package com.mediamanager.library.service;
 
+import com.mediamanager.library.dto.LibraryScanOptions;
 import com.mediamanager.library.entity.MediaLibrary;
 import com.mediamanager.media.entity.MediaFile;
 import com.mediamanager.media.entity.MediaItem;
@@ -7,7 +8,7 @@ import com.mediamanager.media.repository.MediaFileRepository;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.service.LocalArtworkService;
 import com.mediamanager.media.service.MediaChapterService;
-import com.mediamanager.media.service.MediaPostProcessService;
+import com.mediamanager.media.service.MediaPostProcessQueueService;
 import com.mediamanager.media.service.MediaSubtitleService;
 import com.mediamanager.metadata.service.MetadataApplyService;
 import com.mediamanager.metadata.service.MetadataPipelineService;
@@ -37,7 +38,7 @@ public class FileScanProcessor {
     private final MetadataPipelineService pipelineService;
     private final MetadataApplyService metadataApplyService;
     private final FileNameParser fileNameParser;
-    private final MediaPostProcessService mediaPostProcessService;
+    private final MediaPostProcessQueueService postProcessQueueService;
     private final MediaChapterService mediaChapterService;
     private final MediaSubtitleService mediaSubtitleService;
     private final LocalArtworkService localArtworkService;
@@ -96,6 +97,12 @@ public class FileScanProcessor {
 
     @Transactional
     public ScanResult scanFile(MediaLibrary library, Path file, BasicFileAttributes attrs) {
+        return scanFile(library, file, attrs, LibraryScanOptions.defaults());
+    }
+
+    @Transactional
+    public ScanResult scanFile(MediaLibrary library, Path file, BasicFileAttributes attrs, LibraryScanOptions options) {
+        LibraryScanOptions scanOptions = options != null ? options : LibraryScanOptions.defaults();
         String fileName = file.getFileName().toString();
         String extension = getExtension(fileName).toLowerCase();
         String mediaType = determineMediaType(library.getType(), extension);
@@ -112,6 +119,18 @@ public class FileScanProcessor {
         String filePath = normalizePath(file.toAbsolutePath().toString());
         MediaFile existing = fileRepository.findByFilePath(filePath).orElse(null);
         if (existing != null && !Boolean.TRUE.equals(existing.getDeleted()) && !hasFileChanged(existing, attrs)) {
+            boolean shouldReprocess = scanOptions.refreshMetadata()
+                    || (scanOptions.scanMissingMetadata()
+                            && hasMissingMetadata(existing.getMediaItem(), existing, mediaType));
+            if (shouldReprocess) {
+                try {
+                    processFile(library, file, attrs, mediaType, scanOptions);
+                    return ScanResult.of(ScanOutcome.UPDATED);
+                } catch (Exception e) {
+                    log.error("Failed to refresh metadata for unchanged file: {}", filePath, e);
+                    return ScanResult.failed(e);
+                }
+            }
             if (existing.getMediaItem() != null) {
                 existing.getMediaItem().setLastScannedAt(Instant.now());
                 itemRepository.save(existing.getMediaItem());
@@ -123,7 +142,7 @@ public class FileScanProcessor {
         }
 
         try {
-            processFile(library, file, attrs, mediaType);
+            processFile(library, file, attrs, mediaType, scanOptions);
             if (existing == null) {
                 return ScanResult.of(ScanOutcome.CREATED);
             }
@@ -139,6 +158,17 @@ public class FileScanProcessor {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void processFile(MediaLibrary library, Path file, BasicFileAttributes attrs, String mediaType) {
+        processFile(library, file, attrs, mediaType, LibraryScanOptions.defaults());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void processFile(
+            MediaLibrary library,
+            Path file,
+            BasicFileAttributes attrs,
+            String mediaType,
+            LibraryScanOptions options) {
+        LibraryScanOptions scanOptions = options != null ? options : LibraryScanOptions.defaults();
         String fileName = file.getFileName().toString();
         String filePath = normalizePath(file.toAbsolutePath().toString());
 
@@ -170,7 +200,9 @@ public class FileScanProcessor {
             metadataApplyService.applyResult(item, pipelineResult, mediaFile);
             localArtworkService.applyLocalArtwork(item, mediaFile, file);
             mediaSubtitleService.syncLocalSubtitles(item, mediaFile, file);
-            enqueuePostProcessAfterCommit(item.getId());
+            if (!scanOptions.skipPostProcess()) {
+                enqueuePostProcessAfterCommit(item.getId());
+            }
             log.info("Successfully processed item: {}", item.getTitle());
         } catch (Exception e) {
             log.error("Error during metadata extraction for file: {}", filePath, e);
@@ -279,13 +311,13 @@ public class FileScanProcessor {
             return;
         }
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            mediaPostProcessService.afterMetadataUpdatedAsync(itemId);
+            enqueuePostProcessSafely(itemId);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                mediaPostProcessService.afterMetadataUpdatedAsync(itemId);
+                enqueuePostProcessSafely(itemId);
             }
         });
     }
@@ -295,19 +327,70 @@ public class FileScanProcessor {
             return;
         }
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            mediaChapterService.ensureChaptersForFileAsync(mediaFileId);
+            enqueueChaptersSafely(mediaFileId);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                mediaChapterService.ensureChaptersForFileAsync(mediaFileId);
+                enqueueChaptersSafely(mediaFileId);
             }
         });
     }
 
+    private void enqueuePostProcessSafely(Integer itemId) {
+        try {
+            postProcessQueueService.enqueueItemFull(itemId, "SCAN");
+        } catch (Exception e) {
+            log.warn("Failed to enqueue post-process for item {} after scan: {}", itemId, e.getMessage());
+        }
+    }
+
+    private void enqueueChaptersSafely(Integer mediaFileId) {
+        try {
+            postProcessQueueService.enqueueFileChapters(mediaFileId, "SCAN");
+        } catch (Exception e) {
+            log.warn("Failed to enqueue chapter extraction for file {} after scan: {}", mediaFileId, e.getMessage());
+        }
+    }
+
     private boolean isVideoMediaType(String mediaType) {
         return "MOVIE".equals(mediaType) || "TV_SHOW".equals(mediaType) || "EPISODE".equals(mediaType);
+    }
+
+    private boolean hasMissingMetadata(MediaItem item, MediaFile file, String mediaType) {
+        if (item == null) {
+            return true;
+        }
+        if ("UNIDENTIFIED".equals(item.getStatus()) || "ERROR".equals(item.getStatus())) {
+            return true;
+        }
+        if (isBlank(item.getTitle())) {
+            return true;
+        }
+        if (file != null) {
+            if (isVideoMediaType(mediaType) || "AUDIO".equals(mediaType)) {
+                if (file.getDurationSeconds() == null) {
+                    return true;
+                }
+            }
+            if (isVideoMediaType(mediaType)) {
+                if (isBlank(file.getVideoCodec()) || file.getWidth() == null || file.getHeight() == null) {
+                    return true;
+                }
+            }
+            if ("IMAGE".equals(mediaType) && (file.getWidth() == null || file.getHeight() == null)) {
+                return true;
+            }
+        }
+        if (isBlank(item.getOverview()) && isBlank(item.getPosterPath())) {
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private static String describeError(Throwable error) {

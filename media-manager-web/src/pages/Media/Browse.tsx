@@ -32,6 +32,7 @@ import { searchUnified } from '@/services/search';
 import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
 import EmptyState from '@/components/EmptyState';
 import MediaCard from '@/components/MediaCard';
+import { PC_MEDIA_CARD_PREVIEW_MODE } from '@/constants/mediaPreview';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { openPlayerWindow } from '@/utils/playerWindow';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
@@ -402,7 +403,7 @@ const MediaBrowse: React.FC = () => {
             watched={item.watched}
             favorited={item.favorited}
             watchlisted={item.watchlisted}
-            previewMode="hover"
+            previewMode={PC_MEDIA_CARD_PREVIEW_MODE}
             onClick={() => history.push(`/media/${item.id}`)}
             onPlay={
               access.canPlayMedia && item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type)

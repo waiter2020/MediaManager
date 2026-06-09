@@ -1,6 +1,7 @@
 package com.mediamanager.library.controller;
 
 import com.mediamanager.common.response.ApiResponse;
+import com.mediamanager.library.dto.LibraryScanRequest;
 import com.mediamanager.library.dto.MediaLibraryCreateRequest;
 import com.mediamanager.library.dto.MediaLibraryResponse;
 import com.mediamanager.library.dto.MediaLibraryUpdateRequest;
@@ -65,8 +66,10 @@ public class MediaLibraryController {
     @PostMapping("/{id}/scan")
     @PreAuthorize("hasAuthority('library:scan')")
     @Operation(summary = "Trigger library scan")
-    public ApiResponse<Void> triggerScan(@PathVariable Integer id) {
-        libraryService.triggerScan(id);
+    public ApiResponse<Void> triggerScan(
+            @PathVariable Integer id,
+            @RequestBody(required = false) @Valid LibraryScanRequest request) {
+        libraryService.triggerScan(id, request);
         return ApiResponse.success();
     }
 

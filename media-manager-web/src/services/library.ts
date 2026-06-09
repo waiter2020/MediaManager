@@ -1,6 +1,12 @@
 import { request } from '@umijs/max';
 import type { ApiResponse } from '@/types/api';
-import type { LibraryPath, LibraryPluginConfig, LibraryType, MediaLibrary } from '@/types/library';
+import type {
+  LibraryPath,
+  LibraryPluginConfig,
+  LibraryScanRequest,
+  LibraryType,
+  MediaLibrary,
+} from '@/types/library';
 
 export interface LibraryUpsertPayload {
   name: string;
@@ -38,8 +44,8 @@ export async function deleteLibrary(id: number) {
   return request<ApiResponse<void>>(`/api/v1/libraries/${id}`, { method: 'DELETE' });
 }
 
-export async function triggerScan(id: number) {
-  return request<ApiResponse<void>>(`/api/v1/libraries/${id}/scan`, { method: 'POST' });
+export async function triggerScan(id: number, options?: LibraryScanRequest) {
+  return request<ApiResponse<void>>(`/api/v1/libraries/${id}/scan`, { method: 'POST', data: options });
 }
 
 export async function cancelScan(id: number) {

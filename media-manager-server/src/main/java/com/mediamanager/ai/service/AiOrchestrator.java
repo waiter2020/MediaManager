@@ -13,7 +13,6 @@ import com.mediamanager.system.service.SysConfigService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -232,22 +231,26 @@ public class AiOrchestrator {
                 .parseNaturalLanguage(query, defaultConfig(AiTaskType.NL_QUERY));
     }
 
-    @Async("postProcessExecutor")
+    public void completeMetadataIfNeeded(MediaItem item) {
+        if (item == null || item.getId() == null) {
+            return;
+        }
+        if (item.getOverview() != null && !item.getOverview().isBlank()) {
+            return;
+        }
+        Integer libraryId = item.getLibrary() != null ? item.getLibrary().getId() : null;
+        AiProvider provider = resolve(libraryId, AiTaskType.COMPLETE_METADATA);
+        if ("noop".equals(provider.providerId())) {
+            return;
+        }
+        String prompt = "Write a concise overview in the same language as the title for this media: "
+                + item.getTitle();
+        provider.completeMetadata(prompt, defaultConfig(libraryId, AiTaskType.COMPLETE_METADATA)).ifPresent(overview ->
+                aiSuggestionService.createSuggestion(item, "overview", overview, provider.providerId(), 0.8f));
+    }
+
     public void completeMetadataAsync(Integer itemId) {
-        mediaItemRepository.findById(itemId).ifPresent(item -> {
-            if (item.getOverview() != null && !item.getOverview().isBlank()) {
-                return;
-            }
-            Integer libraryId = item.getLibrary() != null ? item.getLibrary().getId() : null;
-            AiProvider provider = resolve(libraryId, AiTaskType.COMPLETE_METADATA);
-            if ("noop".equals(provider.providerId())) {
-                return;
-            }
-            String prompt = "Write a concise overview in the same language as the title for this media: "
-                    + item.getTitle();
-            provider.completeMetadata(prompt, defaultConfig(libraryId, AiTaskType.COMPLETE_METADATA)).ifPresent(overview ->
-                    aiSuggestionService.createSuggestion(item, "overview", overview, provider.providerId(), 0.8f));
-        });
+        mediaItemRepository.findById(itemId).ifPresent(this::completeMetadataIfNeeded);
     }
 
     public boolean isClassifierEnabled() {

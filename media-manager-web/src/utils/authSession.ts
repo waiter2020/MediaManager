@@ -1,5 +1,7 @@
 const ACCESS_TOKEN_KEY = 'accessToken';
 const REFRESH_TOKEN_KEY = 'refreshToken';
+const REMEMBER_LOGIN_KEY = 'rememberLogin';
+const REMEMBERED_USERNAME_KEY = 'rememberedUsername';
 
 export interface ApiEnvelope<T = unknown> {
   code?: number;
@@ -21,26 +23,73 @@ export interface TokenPair {
   refreshToken?: string;
 }
 
+export interface SetSessionTokensOptions {
+  remember?: boolean;
+}
+
+function readToken(storage: Storage, key: string): string | null {
+  return storage.getItem(key);
+}
+
+function writeToken(storage: Storage, key: string, value: string | undefined) {
+  if (value) {
+    storage.setItem(key, value);
+  } else {
+    storage.removeItem(key);
+  }
+}
+
+function clearTokensInStorage(storage: Storage) {
+  storage.removeItem(ACCESS_TOKEN_KEY);
+  storage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+export function isRememberLogin(): boolean {
+  const value = localStorage.getItem(REMEMBER_LOGIN_KEY);
+  if (value === 'false') {
+    return false;
+  }
+  return true;
+}
+
+export function getRememberedUsername(): string | null {
+  return localStorage.getItem(REMEMBERED_USERNAME_KEY);
+}
+
+export function setRememberedUsername(username: string | null) {
+  if (username) {
+    localStorage.setItem(REMEMBERED_USERNAME_KEY, username);
+  } else {
+    localStorage.removeItem(REMEMBERED_USERNAME_KEY);
+  }
+}
+
 export function getAccessToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY);
+  return (
+    readToken(localStorage, ACCESS_TOKEN_KEY) ?? readToken(sessionStorage, ACCESS_TOKEN_KEY)
+  );
 }
 
 export function getRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
+  return (
+    readToken(localStorage, REFRESH_TOKEN_KEY) ?? readToken(sessionStorage, REFRESH_TOKEN_KEY)
+  );
 }
 
-export function setSessionTokens(tokens: TokenPair) {
-  if (tokens.accessToken) {
-    localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
-  }
-  if (tokens.refreshToken) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
-  }
+export function setSessionTokens(tokens: TokenPair, options?: SetSessionTokensOptions) {
+  const remember = options?.remember ?? isRememberLogin();
+  const targetStorage = remember ? localStorage : sessionStorage;
+  const otherStorage = remember ? sessionStorage : localStorage;
+
+  writeToken(targetStorage, ACCESS_TOKEN_KEY, tokens.accessToken);
+  writeToken(targetStorage, REFRESH_TOKEN_KEY, tokens.refreshToken);
+  clearTokensInStorage(otherStorage);
+  localStorage.setItem(REMEMBER_LOGIN_KEY, remember ? 'true' : 'false');
 }
 
 export function clearSessionTokens() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  clearTokensInStorage(localStorage);
+  clearTokensInStorage(sessionStorage);
 }
 
 export function authHeaders(): HeadersInit {
@@ -92,7 +141,7 @@ export async function refreshSession() {
   });
 
   if (data.code === 200 && data.data?.accessToken) {
-    setSessionTokens(data.data);
+    setSessionTokens(data.data, { remember: isRememberLogin() });
     return data.data;
   }
   return null;

@@ -26,6 +26,15 @@ export interface LibraryPluginConfig {
   config?: string;
 }
 
+export interface LibraryScanRequest {
+  refreshMetadata?: boolean;
+  scanMissingMetadata?: boolean;
+  reconcileMissing?: boolean;
+  scrapeAfterScan?: boolean;
+  scrapeTargetStatus?: 'UNIDENTIFIED' | 'IDENTIFIED' | 'ALL';
+  skipPostProcess?: boolean;
+}
+
 export interface MediaLibrary {
   id: number;
   name: string;

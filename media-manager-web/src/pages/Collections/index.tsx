@@ -1,54 +1,78 @@
-import React, { useEffect, useState } from 'react';
-import { PageContainer } from '@ant-design/pro-components';
-import { Button, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Spin, Switch, Tag, Typography, message } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Select,
+  Switch,
+  Tag,
+  Tooltip,
+  message,
+} from 'antd';
 import {
   AppstoreAddOutlined,
+  ClockCircleOutlined,
+  DatabaseOutlined,
   DeleteOutlined,
+  FolderOpenOutlined,
   LockOutlined,
   PlusOutlined,
+  SearchOutlined,
   ShareAltOutlined,
+  SortAscendingOutlined,
   ThunderboltOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons';
-import { history, useAccess } from '@umijs/max';
+import { history } from '@umijs/max';
 import EmptyState from '@/components/EmptyState';
-import MediaCard from '@/components/MediaCard';
 import {
   createCollection,
   deleteCollection,
-  getCollection,
-  getCollectionItems,
   listCollections,
-  removeItemFromCollection,
   type CollectionPayload,
   type MediaCollection,
 } from '@/services/collection';
 import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
-import { openPlayerWindow } from '@/utils/playerWindow';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
-import type { MediaItem } from '@/types/media';
-import './index.css';
+import './List.css';
 
-const typeLabels: Record<string, string> = {
+const TYPE_LABELS: Record<string, string> = {
   COLLECTION: '合集',
   PLAYLIST: '播放列表',
 };
 
-const previewableTypes = new Set(['MOVIE', 'TV_SHOW', 'EPISODE']);
-const collectionPageSize = 30;
+const SORT_OPTIONS = [
+  { label: '名称 A-Z', value: 'name-asc' },
+  { label: '名称 Z-A', value: 'name-desc' },
+  { label: '最近创建', value: 'created-desc' },
+  { label: '最近更新', value: 'updated-desc' },
+  { label: '媒体数量', value: 'items-desc' },
+];
+
+const PREVIEWABLE_TYPES = new Set(['MOVIE', 'TV_SHOW', 'EPISODE']);
+
+function formatRelativeTime(isoStr?: string | null): string {
+  if (!isoStr) return '未知';
+  const date = new Date(isoStr);
+  const diff = Date.now() - date.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return date.toLocaleDateString('zh-CN');
+}
 
 const CollectionsPage: React.FC = () => {
-  const access = useAccess();
   const [collections, setCollections] = useState<MediaCollection[]>([]);
-  const [activeId, setActiveId] = useState<number | null>(null);
-  const [active, setActive] = useState<MediaCollection | null>(null);
-  const [items, setItems] = useState<MediaItem[]>([]);
-  const [itemsTotal, setItemsTotal] = useState(0);
-  const [itemsPage, setItemsPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [itemsLoading, setItemsLoading] = useState(false);
+  const [keyword, setKeyword] = useState('');
+  const [sortBy, setSortBy] = useState('name-asc');
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [previewCollectionId, setPreviewCollectionId] = useState<number | null>(null);
@@ -57,67 +81,20 @@ const CollectionsPage: React.FC = () => {
   const [form] = Form.useForm<CollectionPayload>();
   const smartEnabled = Form.useWatch('smart', form);
 
-  const loadCollections = async (nextActiveId?: number) => {
+  const fetchCollections = async () => {
     setLoading(true);
     try {
       const res = await listCollections();
       if (res.code === 200) {
-        const rows = res.data || [];
-        setCollections(rows);
-        const resolvedId = nextActiveId ?? activeId ?? rows[0]?.id ?? null;
-        setActiveId(resolvedId);
-        if (resolvedId) {
-          await loadDetail(resolvedId);
-        } else {
-          setActive(null);
-        }
+        setCollections(res.data || []);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  const loadDetail = async (id: number) => {
-    setActiveId(id);
-    setItems([]);
-    setItemsTotal(0);
-    setItemsPage(1);
-    setDetailLoading(true);
-    setItemsLoading(true);
-    try {
-      const [detailRes, itemsRes] = await Promise.all([
-        getCollection(id, false),
-        getCollectionItems(id, 1, collectionPageSize),
-      ]);
-      if (detailRes.code === 200) {
-        setActive(detailRes.data);
-      }
-      if (itemsRes.code === 200 && itemsRes.data) {
-        setItems(itemsRes.data.items || []);
-        setItemsTotal(itemsRes.data.total || 0);
-      }
-    } finally {
-      setDetailLoading(false);
-      setItemsLoading(false);
-    }
-  };
-
-  const loadItemsPage = async (id: number, nextPage: number) => {
-    setItemsLoading(true);
-    try {
-      const res = await getCollectionItems(id, nextPage, collectionPageSize);
-      if (res.code === 200 && res.data) {
-        setItems(res.data.items || []);
-        setItemsTotal(res.data.total || 0);
-        setItemsPage(nextPage);
-      }
-    } finally {
-      setItemsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadCollections();
+    fetchCollections();
   }, []);
 
   const coverUrl = (collection: MediaCollection) => {
@@ -147,242 +124,271 @@ const CollectionsPage: React.FC = () => {
         message.success('合集已创建');
         setCreateOpen(false);
         form.resetFields();
-        await loadCollections(res.data.id);
+        history.push(`/collections/${res.data.id}`);
       }
     } finally {
       setCreateLoading(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (!active) return;
-    await deleteCollection(active.id);
-    message.success('合集已删除');
-    const next = collections.find((item) => item.id !== active.id);
-    await loadCollections(next?.id);
-  };
-
-  const handleRemoveItem = async (item: MediaItem) => {
-    if (!active) return;
-    const res = await removeItemFromCollection(active.id, item.id);
+  const handleDelete = async (e: React.MouseEvent | undefined, id: number) => {
+    e?.stopPropagation();
+    const res = await deleteCollection(id);
     if (res.code === 200) {
-      message.success('已移出合集');
-      setActive({ ...res.data, items: undefined });
-      setCollections((prev) =>
-        prev.map((collection) =>
-          collection.id === active.id ? { ...collection, itemCount: res.data.itemCount, coverItem: res.data.coverItem } : collection,
-        ),
+      message.success('合集已删除');
+      fetchCollections();
+    }
+  };
+
+  const filteredCollections = useMemo(() => {
+    let list = [...collections];
+    if (keyword.trim()) {
+      const kw = keyword.trim().toLowerCase();
+      list = list.filter(
+        (collection) =>
+          collection.name?.toLowerCase().includes(kw) ||
+          collection.description?.toLowerCase().includes(kw),
       );
-      const nextTotal = Math.max(itemsTotal - 1, 0);
-      const nextPage = Math.min(itemsPage, Math.max(1, Math.ceil(nextTotal / collectionPageSize)));
-      await loadItemsPage(active.id, nextPage);
     }
-  };
 
-  const openItemPlayer = (item: MediaItem) => {
-    if (!openPlayerWindow(item.id)) {
-      history.push(`/player/${item.id}`);
-    }
-  };
+    const [field, order] = sortBy.split('-');
+    list.sort((a, b) => {
+      if (field === 'name') {
+        return order === 'asc'
+          ? (a.name || '').localeCompare(b.name || '', 'zh-CN')
+          : (b.name || '').localeCompare(a.name || '', 'zh-CN');
+      }
+      if (field === 'created') {
+        const ta = new Date(a.createdAt || 0).getTime();
+        const tb = new Date(b.createdAt || 0).getTime();
+        return order === 'desc' ? tb - ta : ta - tb;
+      }
+      if (field === 'updated') {
+        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return order === 'desc' ? tb - ta : ta - tb;
+      }
+      if (field === 'items') {
+        return order === 'desc'
+          ? (b.itemCount || 0) - (a.itemCount || 0)
+          : (a.itemCount || 0) - (b.itemCount || 0);
+      }
+      return 0;
+    });
+    return list;
+  }, [collections, keyword, sortBy]);
 
-  const renderItemsSkeleton = () => (
-    <div className="media-grid collection-media-grid">
-      {Array.from({ length: 12 }).map((_, index) => (
-        <div key={index} className="skeleton-card">
-          <div className="skeleton-poster" />
-          <div className="skeleton-text">
-            <div className="skeleton-line" />
-            <div className="skeleton-line" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
-  const renderCollectionTile = (collection: MediaCollection) => {
-    const url = coverUrl(collection);
-    const coverItem = collection.coverItem || collection.items?.[0];
-    const previewVideoUrl =
-      coverItem?.fileIds?.length && previewableTypes.has(coverItem.type)
-        ? getFileStreamUrl(coverItem.fileIds[0])
-        : null;
-    const showVideoPreview =
-      !autoplayDisabled && previewCollectionId === collection.id && !!previewVideoUrl && !previewVideoErrors[collection.id];
-    const selected = collection.id === activeId;
-    return (
-      <button
-        key={collection.id}
-        type="button"
-        className={`collection-tile${selected ? ' selected' : ''}`}
-        onClick={() => loadDetail(collection.id)}
-        onMouseEnter={() => !autoplayDisabled && setPreviewCollectionId(collection.id)}
-        onMouseLeave={() =>
-          setPreviewCollectionId((current) => (current === collection.id ? null : current))
-        }
-      >
-        <div className="collection-cover">
-          {url ? <img src={url} alt={collection.name} /> : <AppstoreAddOutlined />}
-          {showVideoPreview && (
-            <video
-              src={previewVideoUrl || undefined}
-              muted
-              playsInline
-              preload="metadata"
-              onLoadedMetadata={(event) => {
-                playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                  setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
-                });
-              }}
-              onEnded={(event) => {
-                playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                  setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
-                });
-              }}
-              onError={() => {
-                setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
-              }}
-            />
-          )}
-        </div>
-        <div className="collection-tile-body">
-          <div className="collection-tile-title" title={collection.name}>
-            {collection.name}
-          </div>
-          <div className="collection-tile-meta">
-            <span>{collection.itemCount || 0} 项</span>
-            {collection.smart && <span>Smart</span>}
-            <span>{typeLabels[collection.type] || collection.type}</span>
-          </div>
-        </div>
-      </button>
-    );
-  };
+  const totalItems = collections.reduce((sum, collection) => sum + (collection.itemCount || 0), 0);
 
   return (
-    <PageContainer
-      title="合集"
-      extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建
-        </Button>
-      }
-    >
-      {loading ? (
-        <div className="collections-loading">
-          <Spin size="large" />
+    <div className="collections-page">
+      <div className="collections-header">
+        <div className="collections-header-left">
+          <h2>合集</h2>
+          {!loading && collections.length > 0 && (
+            <div className="collections-summary">
+              <span className="summary-item">
+                <AppstoreAddOutlined /> {collections.length} 个合集
+              </span>
+              <span className="summary-divider" />
+              <span className="summary-item">
+                <DatabaseOutlined /> {totalItems.toLocaleString('zh-CN')} 个媒体
+              </span>
+            </div>
+          )}
         </div>
-      ) : collections.length === 0 ? (
-        <EmptyState
-          description="还没有合集。可以在这里创建，也可以在媒体详情页把条目加入合集。"
-          actionText="新建合集"
-          onAction={() => setCreateOpen(true)}
-        />
-      ) : (
-        <div className="collections-layout">
-          <aside className="collections-sidebar">{collections.map(renderCollectionTile)}</aside>
-          <section className="collection-detail">
-            {detailLoading || !active ? (
-              <div className="collections-loading">
-                <Spin />
-              </div>
-            ) : (
-              <>
-                <div className="collection-heading">
-                  <div>
-                    <div className="collection-title-row">
-                      <h2>{active.name}</h2>
-                      <Tag icon={active.visibility === 'SHARED' ? <ShareAltOutlined /> : <LockOutlined />}>
-                        {active.visibility === 'SHARED' ? '共享' : '私有'}
-                      </Tag>
-                      {active.smart && <Tag icon={<ThunderboltOutlined />} color="processing">Smart</Tag>}
-                      <Tag icon={<UnorderedListOutlined />}>{typeLabels[active.type] || active.type}</Tag>
-                    </div>
-                    {active.description && (
-                      <Typography.Paragraph className="collection-description">
-                        {active.description}
-                      </Typography.Paragraph>
-                    )}
-                  </div>
-                  <Popconfirm title="删除这个合集？" onConfirm={handleDelete}>
-                    <Button danger icon={<DeleteOutlined />}>
-                      删除
-                    </Button>
-                  </Popconfirm>
-                </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+          新建合集
+        </Button>
+      </div>
 
-                <div className="collection-content-heading">
-                  <h3>合集内容</h3>
-                  <span>共 {itemsTotal} 项</span>
-                </div>
-
-                <div className="collection-content">
-                  {itemsLoading ? (
-                    renderItemsSkeleton()
-                  ) : items.length > 0 ? (
-                    <div className="media-grid collection-media-grid">
-                      {items.map((item) => (
-                        <div key={item.id} className="collection-media-card">
-                          <MediaCard
-                            id={item.id}
-                            title={item.title}
-                            type={item.type}
-                            posterPath={item.posterPath}
-                            fileIds={item.fileIds}
-                            rating={item.rating}
-                            releaseDate={item.releaseDate}
-                            overview={item.overview}
-                            libraryName={item.libraryName}
-                            tags={item.tags}
-                            categories={item.categories}
-                            playbackPercent={item.playbackPercent}
-                            watched={item.watched}
-                            favorited={item.favorited}
-                            watchlisted={item.watchlisted}
-                            previewMode="hover"
-                            onClick={() => history.push(`/media/${item.id}`)}
-                            onPlay={
-                              access.canPlayMedia && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type)
-                                ? () => openItemPlayer(item)
-                                : undefined
-                            }
-                          />
-                          {!active.smart && (
-                            <Button
-                              className="collection-remove-item"
-                              size="small"
-                              type="primary"
-                              danger
-                              icon={<DeleteOutlined />}
-                              aria-label={`移除 ${item.title}`}
-                              onClick={() => handleRemoveItem(item)}
-                            />
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <EmptyState description="这个合集还没有内容。打开媒体详情页可以把条目加入合集。" />
-                  )}
-                </div>
-
-                {!itemsLoading && itemsTotal > 0 && (
-                  <div className="collection-pagination">
-                    <span>共 {itemsTotal} 项</span>
-                    <Pagination
-                      current={itemsPage}
-                      total={itemsTotal}
-                      pageSize={collectionPageSize}
-                      onChange={(nextPage) => active && loadItemsPage(active.id, nextPage)}
-                      showSizeChanger={false}
-                      showQuickJumper={itemsTotal > collectionPageSize * 5}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+      {!loading && collections.length > 0 && (
+        <div className="collections-toolbar">
+          <div className="collections-toolbar-left">
+            <Input
+              className="collections-search"
+              placeholder="搜索合集名称或描述..."
+              prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.3)' }} />}
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              allowClear
+              style={{ width: 260 }}
+            />
+          </div>
+          <div className="collections-toolbar-right">
+            <Select
+              value={sortBy}
+              onChange={setSortBy}
+              options={SORT_OPTIONS}
+              style={{ width: 130 }}
+              suffixIcon={<SortAscendingOutlined />}
+              variant="borderless"
+            />
+          </div>
         </div>
       )}
+
+      <div className="collections-content">
+        {loading ? (
+          <div className="collections-grid">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="collection-card collection-card-skeleton">
+                <div className="collection-card-accent" />
+                <div className="collection-card-body">
+                  <div className="skeleton-row">
+                    <div className="skeleton-circle" />
+                    <div className="skeleton-lines">
+                      <div className="skeleton-line w60" />
+                      <div className="skeleton-line w40" />
+                    </div>
+                  </div>
+                  <div className="skeleton-stats">
+                    <div className="skeleton-line w30" />
+                    <div className="skeleton-line w30" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : filteredCollections.length === 0 && keyword ? (
+          <EmptyState description={`未找到与 "${keyword}" 相关的合集`} />
+        ) : collections.length === 0 ? (
+          <EmptyState
+            description="还没有合集。可以在这里创建，也可以在媒体详情页把条目加入合集。"
+            actionText="新建合集"
+            onAction={() => setCreateOpen(true)}
+          />
+        ) : (
+          <div className="collections-grid">
+            {filteredCollections.map((collection) => {
+              const url = coverUrl(collection);
+              const coverItem = collection.coverItem || collection.items?.[0];
+              const previewVideoUrl =
+                coverItem?.fileIds?.length && PREVIEWABLE_TYPES.has(coverItem.type)
+                  ? getFileStreamUrl(coverItem.fileIds[0])
+                  : null;
+              const showVideoPreview =
+                !autoplayDisabled &&
+                previewCollectionId === collection.id &&
+                !!previewVideoUrl &&
+                !previewVideoErrors[collection.id];
+              const accentClass = collection.smart ? 'smart' : collection.visibility === 'SHARED' ? 'shared' : '';
+
+              return (
+                <div
+                  key={collection.id}
+                  className="collection-card"
+                  onClick={() => history.push(`/collections/${collection.id}`)}
+                  onMouseEnter={() => !autoplayDisabled && setPreviewCollectionId(collection.id)}
+                  onMouseLeave={() =>
+                    setPreviewCollectionId((current) => (current === collection.id ? null : current))
+                  }
+                >
+                  <div className={`collection-card-accent ${accentClass}`} />
+                  <div className="collection-card-body">
+                    <div className="collection-card-top">
+                      <div className="collection-card-cover">
+                        {url ? (
+                          <>
+                            <img src={url} alt={collection.name} />
+                            {showVideoPreview && (
+                              <video
+                                src={previewVideoUrl || undefined}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                onLoadedMetadata={(event) => {
+                                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
+                                    setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
+                                  });
+                                }}
+                                onEnded={(event) => {
+                                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
+                                    setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
+                                  });
+                                }}
+                                onError={() => {
+                                  setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
+                                }}
+                              />
+                            )}
+                          </>
+                        ) : (
+                          <AppstoreAddOutlined />
+                        )}
+                      </div>
+                      <div className="collection-card-info">
+                        <div className="collection-card-name">{collection.name}</div>
+                        <div className="collection-card-tags">
+                          <Tag>{TYPE_LABELS[collection.type] || collection.type}</Tag>
+                          {collection.smart && (
+                            <Tag icon={<ThunderboltOutlined />} color="processing">
+                              Smart
+                            </Tag>
+                          )}
+                          <Tag
+                            icon={collection.visibility === 'SHARED' ? <ShareAltOutlined /> : <LockOutlined />}
+                          >
+                            {collection.visibility === 'SHARED' ? '共享' : '私有'}
+                          </Tag>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="collection-card-stats">
+                      <div className="collection-card-stat">
+                        <span className="stat-val">{(collection.itemCount || 0).toLocaleString('zh-CN')}</span>
+                        <span className="stat-lbl">媒体</span>
+                      </div>
+                      <div className="collection-card-stat">
+                        <span className="stat-val">
+                          <ClockCircleOutlined style={{ fontSize: 12, marginRight: 3 }} />
+                          {formatRelativeTime(collection.updatedAt || collection.createdAt)}
+                        </span>
+                        <span className="stat-lbl">最近更新</span>
+                      </div>
+                    </div>
+
+                    {collection.description && (
+                      <div className="collection-card-description">{collection.description}</div>
+                    )}
+
+                    <div className="collection-card-actions">
+                      <Tooltip title="查看详情">
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<FolderOpenOutlined />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            history.push(`/collections/${collection.id}`);
+                          }}
+                        />
+                      </Tooltip>
+                      <div className="collection-card-actions-spacer" />
+                      <Popconfirm
+                        title="删除这个合集？"
+                        onConfirm={(e) => handleDelete(e as React.MouseEvent | undefined, collection.id)}
+                        onCancel={(e) => e?.stopPropagation()}
+                      >
+                        <Tooltip title="删除">
+                          <Button
+                            size="small"
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </Tooltip>
+                      </Popconfirm>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <Modal
         title="新建合集"
@@ -453,11 +459,7 @@ const CollectionsPage: React.FC = () => {
               <Form.Item name={['rule', 'minRating']} label="Min rating">
                 <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} />
               </Form.Item>
-              <Form.Item
-                name={['rule', 'limit']}
-                label="Limit"
-                tooltip="0 表示无限制"
-              >
+              <Form.Item name={['rule', 'limit']} label="Limit" tooltip="0 表示无限制">
                 <InputNumber min={0} placeholder="无限制" style={{ width: '100%' }} />
               </Form.Item>
               <Form.Item name={['rule', 'sortField']} label="Sort by">
@@ -486,7 +488,7 @@ const CollectionsPage: React.FC = () => {
           )}
         </Form>
       </Modal>
-    </PageContainer>
+    </div>
   );
 };
 

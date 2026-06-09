@@ -72,6 +72,13 @@ export interface SystemLogEvent {
   message: string;
 }
 
+export interface PostProcessStats {
+  pending: number;
+  running: number;
+  failed: number;
+  success: number;
+}
+
 export async function checkSetup() {
   return request<ApiResponse<SystemStatus>>('/api/v1/system/status', { method: 'GET' });
 }
@@ -98,6 +105,10 @@ export async function getSystemCapabilities() {
 
 export async function getScanStatus() {
   return request<ApiResponse<ScanProgress[]>>('/api/v1/system/scan/status', { method: 'GET' });
+}
+
+export async function getPostProcessStats() {
+  return request<ApiResponse<PostProcessStats>>('/api/v1/system/post-process/stats', { method: 'GET' });
 }
 
 export async function getDirectories(path?: string) {

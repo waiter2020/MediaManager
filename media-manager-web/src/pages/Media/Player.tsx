@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { history, useParams, useSearchParams } from '@umijs/max';
-import { ArrowLeftOutlined, CustomerServiceOutlined, PictureOutlined, VideoCameraOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CustomerServiceOutlined,
+  PictureOutlined,
+  SearchOutlined,
+  VideoCameraOutlined,
+} from '@ant-design/icons';
 import { Button, Result, Segmented, Select, Spin, Tooltip } from 'antd';
+import SubtitleSearchModal from '@/components/SubtitleSearchModal';
 import VideoPlayer from '@/components/VideoPlayer';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import { getItemDetail } from '@/services/media';
@@ -24,7 +31,7 @@ import {
   type TranscodeTelemetry,
 } from '@/services/stream';
 import { recordPlay } from '@/services/userActivity';
-import type { MediaItem } from '@/types/media';
+import type { MediaItem, MediaSubtitle } from '@/types/media';
 import './Player.css';
 
 function resolveFileId(item: MediaItem, override?: string | null) {
@@ -112,6 +119,8 @@ const PlayerPage: React.FC = () => {
   const [streamKey, setStreamKey] = useState(0);
   const [mediaStartOffset, setMediaStartOffset] = useState(0);
   const [transcodeSpeed, setTranscodeSpeed] = useState<TranscodeTelemetry | null>(null);
+  const [activeSubtitleId, setActiveSubtitleId] = useState<number | 'off' | null>(null);
+  const [subtitleSearchVisible, setSubtitleSearchVisible] = useState(false);
   const lastAudioReportRef = useRef(0);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
 
@@ -308,15 +317,92 @@ const PlayerPage: React.FC = () => {
     [data, poster],
   );
 
+  const availableSubtitles = useMemo(() => {
+    const subtitles = data?.subtitles || [];
+    if (fileId == null) {
+      return subtitles;
+    }
+    return subtitles.filter(
+      (subtitle) => subtitle.mediaFileId == null || subtitle.mediaFileId === fileId,
+    );
+  }, [data?.subtitles, fileId]);
+
   const subtitleTracks = useMemo(
     () =>
-      (data?.subtitles || []).map((subtitle) => ({
+      availableSubtitles.map((subtitle) => ({
+        id: subtitle.id,
         src: getSubtitleTrackUrl(subtitle.id),
         label: subtitle.title || subtitle.language || subtitle.fileName || `Subtitle ${subtitle.id}`,
         language: subtitle.language,
         defaultTrack: subtitle.defaultTrack,
       })),
-    [data?.subtitles],
+    [availableSubtitles],
+  );
+
+  const activeSubtitleIndex = useMemo(() => {
+    if (activeSubtitleId === 'off') {
+      return null;
+    }
+    if (activeSubtitleId != null) {
+      const index = subtitleTracks.findIndex((track) => track.id === activeSubtitleId);
+      if (index >= 0) {
+        return index;
+      }
+    }
+    const defaultIndex = subtitleTracks.findIndex((track) => track.defaultTrack);
+    if (defaultIndex >= 0) {
+      return defaultIndex;
+    }
+    return subtitleTracks.length > 0 ? 0 : null;
+  }, [activeSubtitleId, subtitleTracks]);
+
+  useEffect(() => {
+    if (!availableSubtitles.length) {
+      setActiveSubtitleId('off');
+      return;
+    }
+    const currentExists =
+      activeSubtitleId != null &&
+      activeSubtitleId !== 'off' &&
+      availableSubtitles.some((subtitle) => subtitle.id === activeSubtitleId);
+    if (activeSubtitleId == null || (!currentExists && activeSubtitleId !== 'off')) {
+      const defaultSubtitle =
+        availableSubtitles.find((subtitle) => subtitle.defaultTrack) || availableSubtitles[0];
+      setActiveSubtitleId(defaultSubtitle?.id ?? 'off');
+    }
+  }, [availableSubtitles, activeSubtitleId]);
+
+  const refreshItemDetail = useCallback(async () => {
+    const res = await getItemDetail(numericId);
+    if (res.code === 200 && res.data) {
+      setData(res.data);
+    }
+  }, [numericId]);
+
+  const handleSubtitleDownloaded = useCallback((subtitle: MediaSubtitle) => {
+    setData((current) =>
+      current
+        ? {
+            ...current,
+            subtitles: [...(current.subtitles || []).filter((item) => item.id !== subtitle.id), subtitle],
+          }
+        : current,
+    );
+    setActiveSubtitleId(subtitle.id);
+    refreshItemDetail().catch(() => {});
+  }, [refreshItemDetail]);
+
+  const subtitleSelectOptions = useMemo(
+    () => [
+      { value: 'off', label: '关闭字幕' },
+      ...availableSubtitles.map((subtitle) => ({
+        value: subtitle.id,
+        label: `${subtitle.title || subtitle.language || subtitle.fileName || `Subtitle ${subtitle.id}`}${
+          subtitle.source ? ` (${subtitle.source})` : ''
+        }`,
+      })),
+    ],
+    [availableSubtitles],
   );
 
   const handleModeChange = async (mode: PlaybackModePreference) => {
@@ -505,6 +591,7 @@ const PlayerPage: React.FC = () => {
           mediaStartOffset={mediaStartOffset}
           onSeekRequest={playbackMode === 'hls' ? handleSeekRequest : undefined}
           subtitles={subtitleTracks}
+          activeSubtitleIndex={activeSubtitleIndex}
           onError={handlePlayerError}
           onBufferingChange={handleBufferingChange}
           onProgress={handleVideoProgress}
@@ -580,10 +667,37 @@ const PlayerPage: React.FC = () => {
               />
             </>
           )}
+          {data?.type !== 'IMAGE' && data?.type !== 'AUDIO' && (
+            <>
+              <Select
+                className="player-subtitle-select"
+                size="small"
+                value={activeSubtitleId === 'off' ? 'off' : activeSubtitleId ?? 'off'}
+                options={subtitleSelectOptions}
+                onChange={(value) => setActiveSubtitleId(value === 'off' ? 'off' : Number(value))}
+              />
+              <Button
+                className="player-icon-button"
+                icon={<SearchOutlined />}
+                aria-label="搜索字幕"
+                onClick={() => setSubtitleSearchVisible(true)}
+              />
+            </>
+          )}
           {renderTranscodeStatus()}
         </div>
       </div>
       {renderStage()}
+      {data?.id ? (
+        <SubtitleSearchModal
+          itemId={data.id}
+          defaultQuery={data.title}
+          fileId={fileId}
+          open={subtitleSearchVisible}
+          onClose={() => setSubtitleSearchVisible(false)}
+          onDownloaded={handleSubtitleDownloaded}
+        />
+      ) : null}
     </div>
   );
 };

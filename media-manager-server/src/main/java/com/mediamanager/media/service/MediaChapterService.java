@@ -21,7 +21,6 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,6 +53,7 @@ public class MediaChapterService {
     private final SysConfigService sysConfigService;
     private final StoragePathMapper storagePathMapper;
     private final LibraryAccessService libraryAccessService;
+    private final MediaPostProcessQueueService postProcessQueueService;
 
     @Value("${mediamanager.ffmpeg.path:ffmpeg}")
     private String yamlFfmpegPath;
@@ -82,8 +82,15 @@ public class MediaChapterService {
         return !chapterRepository.existsByMediaFileId(file.getId());
     }
 
-    @Async("postProcessExecutor")
     public void ensureChaptersForFileAsync(Integer fileId) {
+        ensureChaptersForFileAsync(fileId, "MANUAL");
+    }
+
+    public void ensureChaptersForFileAsync(Integer fileId, String source) {
+        postProcessQueueService.enqueueFileChapters(fileId, source);
+    }
+
+    public void processChaptersForFile(Integer fileId) {
         if (fileId == null) {
             return;
         }

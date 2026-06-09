@@ -1,7 +1,6 @@
 package com.mediamanager.media.repository;
 
 import com.mediamanager.media.entity.MediaCollectionItem;
-import com.mediamanager.media.entity.MediaItem;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,11 +17,10 @@ public interface MediaCollectionItemRepository extends JpaRepository<MediaCollec
 
     @Query(
             value = """
-                    SELECT i.mediaItem FROM MediaCollectionItem i
+                    SELECT i FROM MediaCollectionItem i
                     WHERE i.collection.id = :collectionId
                       AND (i.mediaItem.hidden = false OR i.mediaItem.hidden IS NULL)
                       AND i.mediaItem.library.id IN :libraryIds
-                    ORDER BY i.position ASC, i.createdAt ASC
                     """,
             countQuery = """
                     SELECT COUNT(i) FROM MediaCollectionItem i
@@ -30,7 +28,7 @@ public interface MediaCollectionItemRepository extends JpaRepository<MediaCollec
                       AND (i.mediaItem.hidden = false OR i.mediaItem.hidden IS NULL)
                       AND i.mediaItem.library.id IN :libraryIds
                     """)
-    Page<MediaItem> findVisibleMediaItems(
+    Page<MediaCollectionItem> findVisibleCollectionItems(
             @Param("collectionId") Integer collectionId,
             @Param("libraryIds") Set<Integer> libraryIds,
             Pageable pageable);
