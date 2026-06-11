@@ -28,6 +28,7 @@ export interface UnifiedSearchRequest {
   minYear?: number;
   maxYear?: number;
   minRating?: number;
+  hasSubtitle?: boolean;
   page?: number;
   size?: number;
 }

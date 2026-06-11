@@ -1,6 +1,6 @@
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import type { ActionType, ProColumns } from '@ant-design/pro-components';
-import { Alert, Button, Card, Progress, Space, Statistic, Tag, message } from 'antd';
+import { Alert, Button, Card, Progress, Select, Space, Statistic, Tag, message } from 'antd';
 import { history, useAccess, useParams } from '@umijs/max';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -45,6 +45,7 @@ const LibraryDetail: React.FC = () => {
   const [applyingDefaults, setApplyingDefaults] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [hasSubtitle, setHasSubtitle] = useState<boolean | undefined>(undefined);
 
   const libraryId = Number(id);
 
@@ -70,7 +71,7 @@ const LibraryDetail: React.FC = () => {
 
   useEffect(() => {
     actionRef.current?.reloadAndRest?.();
-  }, [searchQuery]);
+  }, [searchQuery, hasSubtitle]);
 
   const pollClassifyStatus = useCallback(async () => {
     const res = await getLibraryClassifyStatus();
@@ -235,7 +236,7 @@ const LibraryDetail: React.FC = () => {
           )}
         </Card>
       )}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <UnifiedSearchBox
           value={searchValue}
           onChange={setSearchValue}
@@ -247,7 +248,23 @@ const LibraryDetail: React.FC = () => {
           libraryId={libraryId}
           placeholder={`搜索 ${stats?.libraryName || '此媒体库'} 内的媒体`}
           size="middle"
-          style={{ maxWidth: 640 }}
+          style={{ maxWidth: 640, flex: '1 1 320px' }}
+        />
+        <Select
+          style={{ width: 140 }}
+          value={hasSubtitle === undefined ? 'all' : hasSubtitle ? 'yes' : 'no'}
+          onChange={(value) => {
+            if (value === 'all') {
+              setHasSubtitle(undefined);
+            } else {
+              setHasSubtitle(value === 'yes');
+            }
+          }}
+          options={[
+            { label: '全部字幕', value: 'all' },
+            { label: '有字幕', value: 'yes' },
+            { label: '无字幕', value: 'no' },
+          ]}
         />
       </div>
       <ProTable<MediaItem>
@@ -261,6 +278,7 @@ const LibraryDetail: React.FC = () => {
             const res = await searchUnified({
               query: searchQuery.trim(),
               libraryId,
+              hasSubtitle,
               page: current,
               size: pageSize,
             });
@@ -272,6 +290,7 @@ const LibraryDetail: React.FC = () => {
           }
           const res = await getItems({
             libraryId,
+            hasSubtitle,
             page: current,
             size: pageSize,
           });

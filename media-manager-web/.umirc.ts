@@ -1,6 +1,7 @@
 import { defineConfig } from '@umijs/max';
 
 export default defineConfig({
+  esbuildMinifyIIFE: true,
   hash: true,
   styles: ['src/global.less'],
   antd: {

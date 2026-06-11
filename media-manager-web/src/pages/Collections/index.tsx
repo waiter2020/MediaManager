@@ -34,9 +34,9 @@ import {
   type CollectionPayload,
   type MediaCollection,
 } from '@/services/collection';
-import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
+import MediaPreviewVideo from '@/components/MediaPreviewVideo';
+import { resolveItemPosterUrl } from '@/services/stream';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
-import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import './List.css';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -263,14 +263,14 @@ const CollectionsPage: React.FC = () => {
             {filteredCollections.map((collection) => {
               const url = coverUrl(collection);
               const coverItem = collection.coverItem || collection.items?.[0];
-              const previewVideoUrl =
+              const previewFileId =
                 coverItem?.fileIds?.length && PREVIEWABLE_TYPES.has(coverItem.type)
-                  ? getFileStreamUrl(coverItem.fileIds[0])
+                  ? coverItem.fileIds[0]
                   : null;
               const showVideoPreview =
                 !autoplayDisabled &&
                 previewCollectionId === collection.id &&
-                !!previewVideoUrl &&
+                previewFileId != null &&
                 !previewVideoErrors[collection.id];
               const accentClass = collection.smart ? 'smart' : collection.visibility === 'SHARED' ? 'shared' : '';
 
@@ -291,22 +291,10 @@ const CollectionsPage: React.FC = () => {
                         {url ? (
                           <>
                             <img src={url} alt={collection.name} />
-                            {showVideoPreview && (
-                              <video
-                                src={previewVideoUrl || undefined}
-                                muted
-                                playsInline
-                                preload="metadata"
-                                onLoadedMetadata={(event) => {
-                                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                                    setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
-                                  });
-                                }}
-                                onEnded={(event) => {
-                                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                                    setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
-                                  });
-                                }}
+                            {previewFileId != null && (
+                              <MediaPreviewVideo
+                                fileId={previewFileId}
+                                active={showVideoPreview}
                                 onError={() => {
                                   setPreviewVideoErrors((prev) => ({ ...prev, [collection.id]: true }));
                                 }}

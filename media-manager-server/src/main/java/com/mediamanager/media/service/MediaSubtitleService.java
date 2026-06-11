@@ -32,15 +32,16 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -61,6 +62,11 @@ public class MediaSubtitleService {
     );
     private static final Set<String> SUBTITLE_FLAGS = Set.of("forced", "sdh", "cc", "default");
     private static final Pattern ASS_OVERRIDE = Pattern.compile("\\{[^}]*}");
+    private static final Pattern HTML_TAG = Pattern.compile("<[^>]+>");
+    private static final Pattern ASS_INLINE_TAG = Pattern.compile("\\{\\\\[^}]*\\}");
+    private static final Pattern ASS_DRAWING = Pattern.compile("\\\\p\\d+");
+    private static final Pattern VTT_TIMESTAMP_LINE = Pattern.compile(
+            "^((?:\\d{2}:)?\\d{2}:\\d{2}\\.\\d{3})\\s*-->\\s*((?:\\d{2}:)?\\d{2}:\\d{2}\\.\\d{3})(.*)$");
 
     private final MediaSubtitleRepository subtitleRepository;
     private final MediaFileRepository fileRepository;
@@ -193,7 +199,7 @@ public class MediaSubtitleService {
     }
 
     @Transactional(readOnly = true)
-    public ResponseEntity<Resource> getSubtitleTrack(Integer subtitleId) throws IOException {
+    public ResponseEntity<Resource> getSubtitleTrack(Integer subtitleId, Double offset, Double delay) throws IOException {
         MediaSubtitle subtitle = subtitleRepository.findById(subtitleId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND));
         if (subtitle.getMediaFile() != null) {
@@ -207,7 +213,14 @@ public class MediaSubtitleService {
             throw new BusinessException(ErrorCode.MEDIA_FILE_NOT_FOUND, "Subtitle file not found");
         }
 
-        byte[] body = toWebVtt(path, subtitle.getFormat()).getBytes(StandardCharsets.UTF_8);
+        double offsetSeconds = offset != null ? Math.max(0, offset) : 0;
+        double delaySeconds = delay != null ? delay : 0;
+        String vtt = toWebVtt(path, subtitle.getFormat());
+        if (offsetSeconds > 0 || Math.abs(delaySeconds) > 0.001) {
+            vtt = shiftWebVtt(vtt, offsetSeconds, delaySeconds);
+        }
+
+        byte[] body = vtt.getBytes(StandardCharsets.UTF_8);
         ByteArrayResource resource = new ByteArrayResource(body);
         String fileName = getBaseName(subtitle.getFileName() != null ? subtitle.getFileName() : "subtitle") + ".vtt";
         ContentDisposition disposition = ContentDisposition.inline()
@@ -216,7 +229,7 @@ public class MediaSubtitleService {
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/vtt;charset=UTF-8"))
                 .contentLength(body.length)
-                .cacheControl(CacheControl.maxAge(Duration.ofHours(12)).cachePublic())
+                .cacheControl(CacheControl.noCache().cachePrivate())
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
                 .body(resource);
     }
@@ -381,11 +394,47 @@ public class MediaSubtitleService {
 
     private String readSubtitleText(Path path) throws IOException {
         byte[] bytes = Files.readAllBytes(path);
-        try {
-            return new String(bytes, StandardCharsets.UTF_8);
-        } catch (Exception ignored) {
-            return new String(bytes, Charset.forName("GB18030"));
+        if (bytes.length >= 3 && bytes[0] == (byte) 0xEF && bytes[1] == (byte) 0xBB && bytes[2] == (byte) 0xBF) {
+            return new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8);
         }
+        if (bytes.length >= 2) {
+            if (bytes[0] == (byte) 0xFF && bytes[1] == (byte) 0xFE) {
+                return new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16LE);
+            }
+            if (bytes[0] == (byte) 0xFE && bytes[1] == (byte) 0xFF) {
+                return new String(bytes, 2, bytes.length - 2, StandardCharsets.UTF_16BE);
+            }
+        }
+        return pickBestCharset(bytes);
+    }
+
+    private String pickBestCharset(byte[] bytes) {
+        Charset[] candidates = {
+                StandardCharsets.UTF_8,
+                Charset.forName("GB18030"),
+                StandardCharsets.ISO_8859_1
+        };
+        String best = new String(bytes, StandardCharsets.UTF_8);
+        int bestScore = countReplacementChars(best);
+        for (Charset charset : candidates) {
+            String decoded = new String(bytes, charset);
+            int score = countReplacementChars(decoded);
+            if (score < bestScore) {
+                bestScore = score;
+                best = decoded;
+            }
+        }
+        return best;
+    }
+
+    private static int countReplacementChars(String text) {
+        int count = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\uFFFD') {
+                count++;
+            }
+        }
+        return count;
     }
 
     private String ensureWebVttHeader(String text) {
@@ -407,7 +456,10 @@ public class MediaSubtitleService {
             }
             vtt.append(lines[startIndex].replace(',', '.').trim()).append('\n');
             for (int i = startIndex + 1; i < lines.length; i++) {
-                vtt.append(lines[i]).append('\n');
+                String cleaned = cleanSubtitleText(lines[i]);
+                if (!cleaned.isBlank()) {
+                    vtt.append(cleaned).append('\n');
+                }
             }
             vtt.append('\n');
         }
@@ -419,6 +471,8 @@ public class MediaSubtitleService {
         StringBuilder vtt = new StringBuilder("WEBVTT\n\n");
         List<String> fields = new ArrayList<>();
         boolean inEvents = false;
+        LinkedHashMap<String, List<String>> groupedTexts = new LinkedHashMap<>();
+        LinkedHashMap<String, String[]> groupedTimes = new LinkedHashMap<>();
         for (String rawLine : normalized.split("\\n")) {
             String line = rawLine.trim();
             if (line.equalsIgnoreCase("[Events]")) {
@@ -452,17 +506,126 @@ public class MediaSubtitleService {
             if (start == null || end == null || cueText == null) {
                 continue;
             }
-            cueText = ASS_OVERRIDE.matcher(cueText)
-                    .replaceAll("")
-                    .replace("\\N", "\n")
-                    .replace("\\n", "\n")
-                    .trim();
-            if (!cueText.isBlank()) {
-                vtt.append(toVttTimestamp(start)).append(" --> ").append(toVttTimestamp(end)).append('\n')
-                        .append(cueText).append("\n\n");
+            cueText = cleanAssText(cueText);
+            if (cueText.isBlank()) {
+                continue;
+            }
+            String key = start + "|" + end;
+            groupedTexts.computeIfAbsent(key, ignored -> new ArrayList<>()).add(cueText);
+            groupedTimes.putIfAbsent(key, new String[] {start, end});
+        }
+        for (Map.Entry<String, List<String>> entry : groupedTexts.entrySet()) {
+            String[] times = groupedTimes.get(entry.getKey());
+            if (times == null) {
+                continue;
+            }
+            String merged = String.join("\n", entry.getValue());
+            if (!merged.isBlank()) {
+                vtt.append(toVttTimestamp(times[0])).append(" --> ").append(toVttTimestamp(times[1])).append('\n')
+                        .append(merged).append("\n\n");
             }
         }
         return vtt.toString();
+    }
+
+    static String shiftWebVtt(String vtt, double offsetSeconds, double delaySeconds) {
+        double shift = -offsetSeconds + delaySeconds;
+        String normalized = stripBom(vtt).replace("\r\n", "\n").replace('\r', '\n');
+        StringBuilder result = new StringBuilder("WEBVTT\n\n");
+        String[] lines = normalized.split("\\n", -1);
+        int index = 0;
+        while (index < lines.length && !lines[index].contains("-->")) {
+            index++;
+        }
+        while (index < lines.length) {
+            Matcher matcher = VTT_TIMESTAMP_LINE.matcher(lines[index].trim());
+            if (!matcher.matches()) {
+                index++;
+                continue;
+            }
+            double start = parseVttTimestamp(matcher.group(1)) + shift;
+            double end = parseVttTimestamp(matcher.group(2)) + shift;
+            String settings = matcher.group(3) != null ? matcher.group(3) : "";
+            index++;
+            StringBuilder cueText = new StringBuilder();
+            while (index < lines.length && !lines[index].trim().isEmpty() && !lines[index].contains("-->")) {
+                if (!cueText.isEmpty()) {
+                    cueText.append('\n');
+                }
+                cueText.append(lines[index]);
+                index++;
+            }
+            while (index < lines.length && lines[index].trim().isEmpty()) {
+                index++;
+            }
+            if (end <= 0) {
+                continue;
+            }
+            double clampedStart = Math.max(0, start);
+            result.append(formatVttTimestamp(clampedStart))
+                    .append(" --> ")
+                    .append(formatVttTimestamp(Math.max(0, end)))
+                    .append(settings)
+                    .append('\n')
+                    .append(cueText)
+                    .append("\n\n");
+        }
+        return result.toString();
+    }
+
+    private static double parseVttTimestamp(String timestamp) {
+        String[] parts = timestamp.trim().split(":");
+        if (parts.length == 2) {
+            double minutes = Double.parseDouble(parts[0]);
+            double seconds = Double.parseDouble(parts[1]);
+            return minutes * 60 + seconds;
+        }
+        if (parts.length == 3) {
+            double hours = Double.parseDouble(parts[0]);
+            double minutes = Double.parseDouble(parts[1]);
+            double seconds = Double.parseDouble(parts[2]);
+            return hours * 3600 + minutes * 60 + seconds;
+        }
+        return 0;
+    }
+
+    private static String formatVttTimestamp(double seconds) {
+        if (seconds < 0) {
+            seconds = 0;
+        }
+        int totalMillis = (int) Math.round(seconds * 1000);
+        int hours = totalMillis / 3_600_000;
+        int minutes = (totalMillis % 3_600_000) / 60_000;
+        int secs = (totalMillis % 60_000) / 1000;
+        int millis = totalMillis % 1000;
+        return String.format("%02d:%02d:%02d.%03d", hours, minutes, secs, millis);
+    }
+
+    private static String cleanAssText(String text) {
+        String cleaned = ASS_OVERRIDE.matcher(text).replaceAll("");
+        cleaned = ASS_DRAWING.matcher(cleaned).replaceAll("");
+        cleaned = cleaned.replace("\\h", " ");
+        cleaned = cleaned.replace("\\N", "\n").replace("\\n", "\n");
+        return cleanSubtitleText(cleaned);
+    }
+
+    private static String cleanSubtitleText(String text) {
+        if (text == null) {
+            return "";
+        }
+        String cleaned = HTML_TAG.matcher(text).replaceAll("");
+        cleaned = ASS_INLINE_TAG.matcher(cleaned).replaceAll("");
+        cleaned = decodeHtmlEntities(cleaned);
+        return cleaned.trim();
+    }
+
+    private static String decodeHtmlEntities(String text) {
+        return text.replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'");
     }
 
     private String toVttTimestamp(String assTimestamp) {

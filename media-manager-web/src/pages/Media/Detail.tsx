@@ -59,19 +59,13 @@ import {
 import SubtitleSearchModal from '@/components/SubtitleSearchModal';
 import {
   getChapterThumbnailUrl,
-  getFileStreamUrl,
   getRawImageUrl,
   resolveItemBackdropUrl,
   resolveItemPosterUrl,
 } from '@/services/stream';
-import {
-  addItemsToCollection,
-  createCollection,
-  listCollections,
-  type MediaCollection,
-} from '@/services/collection';
+import AddToCollectionModal from '@/components/AddToCollectionModal';
+import MediaPreviewVideo from '@/components/MediaPreviewVideo';
 import { checkFavorite, checkWatchlist, setWatched, toggleFavorite, toggleWatchlist } from '@/services/userActivity';
-import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaChapter, MediaFile, MediaItem } from '@/types/media';
 import './Detail.css';
 
@@ -247,10 +241,6 @@ const MediaDetail: React.FC = () => {
   const [isWatched, setIsWatched] = useState(false);
   const [isWatchlisted, setIsWatchlisted] = useState(false);
   const [collectionOpen, setCollectionOpen] = useState(false);
-  const [collections, setCollections] = useState<MediaCollection[]>([]);
-  const [selectedCollectionId, setSelectedCollectionId] = useState<number | undefined>();
-  const [newCollectionName, setNewCollectionName] = useState('');
-  const [collectionSaving, setCollectionSaving] = useState(false);
   const [allTags, setAllTags] = useState<TagItem[]>([]);
   const [addingTag, setAddingTag] = useState(false);
   const [addTagSelectValue, setAddTagSelectValue] = useState<number | undefined>();
@@ -373,47 +363,6 @@ const MediaDetail: React.FC = () => {
     }
   };
 
-  const openCollectionModal = async () => {
-    setCollectionOpen(true);
-    setSelectedCollectionId(undefined);
-    setNewCollectionName('');
-    const res = await listCollections();
-    if (res.code === 200) {
-      setCollections(res.data || []);
-    }
-  };
-
-  const handleAddToCollection = async () => {
-    setCollectionSaving(true);
-    try {
-      if (selectedCollectionId) {
-        const res = await addItemsToCollection(selectedCollectionId, [numericId]);
-        if (res.code === 200) {
-          message.success('已加入合集');
-          setCollectionOpen(false);
-        }
-        return;
-      }
-      const name = newCollectionName.trim();
-      if (!name) {
-        message.warning('请选择合集或输入新合集名称');
-        return;
-      }
-      const res = await createCollection({
-        name,
-        type: 'COLLECTION',
-        visibility: 'PRIVATE',
-        itemIds: [numericId],
-      });
-      if (res.code === 200) {
-        message.success('已创建合集并加入当前媒体');
-        setCollectionOpen(false);
-      }
-    } finally {
-      setCollectionSaving(false);
-    }
-  };
-
   const handleEditSave = async () => {
     const values = await editForm.validateFields();
     const res = await updateMetadata(numericId, values);
@@ -525,9 +474,9 @@ const MediaDetail: React.FC = () => {
   });
   const year = data.releaseDate ? data.releaseDate.substring(0, 4) : null;
   const canPreviewPoster = PREVIEWABLE_TYPES.has(data.type);
-  const posterPreviewVideoUrl = data.fileIds?.length ? getFileStreamUrl(data.fileIds[0]) : null;
+  const posterPreviewFileId = data.fileIds?.length ? data.fileIds[0] : null;
   const showPosterVideoPreview =
-    !autoplayDisabled && posterHovered && canPreviewPoster && !!posterPreviewVideoUrl && !posterPreviewVideoError;
+    !autoplayDisabled && posterHovered && canPreviewPoster && posterPreviewFileId != null && !posterPreviewVideoError;
   const vm = buildMetadata(data);
   const overviewFields = vm.overview.filter((field) => field.value != null && field.value !== '');
   const metadataFields = vm.metadata.filter((field) => field.value != null && field.value !== '');
@@ -638,24 +587,13 @@ const MediaDetail: React.FC = () => {
                     </span>
                   )}
                   {previewing && (
-                    <video
+                    <MediaPreviewVideo
+                      fileId={chapter.mediaFileId}
+                      active
                       className="detail-chapter-preview"
-                      src={getFileStreamUrl(chapter.mediaFileId)}
-                      muted
-                      playsInline
-                      preload="metadata"
-                      onLoadedMetadata={(event) => {
-                        event.currentTarget.currentTime = Math.max(0, chapter.startSeconds);
-                        event.currentTarget.play().catch(() => {
-                          setChapterPreviewErrorIds((ids) => [...new Set([...ids, chapter.id])]);
-                        });
-                      }}
-                      onTimeUpdate={(event) => {
-                        if (event.currentTarget.currentTime >= previewEnd) {
-                          event.currentTarget.currentTime = Math.max(0, chapter.startSeconds);
-                          event.currentTarget.play().catch(() => {});
-                        }
-                      }}
+                      startSeconds={chapter.startSeconds}
+                      loopEndSeconds={previewEnd}
+                      randomStart={false}
                       onError={() => {
                         setChapterPreviewErrorIds((ids) => [...new Set([...ids, chapter.id])]);
                       }}
@@ -861,19 +799,11 @@ const MediaDetail: React.FC = () => {
             ) : (
               <div className="detail-poster-placeholder">{TYPE_ICONS[data.type] || <FileOutlined />}</div>
             )}
-            {showPosterVideoPreview && (
-              <video
+            {posterPreviewFileId != null && (
+              <MediaPreviewVideo
+                fileId={posterPreviewFileId}
+                active={showPosterVideoPreview}
                 className="detail-poster-preview detail-poster-preview-video"
-                src={posterPreviewVideoUrl || undefined}
-                muted
-                playsInline
-                preload="metadata"
-                onLoadedMetadata={(event) => {
-                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPosterPreviewVideoError(true));
-                }}
-                onEnded={(event) => {
-                  playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPosterPreviewVideoError(true));
-                }}
                 onError={() => setPosterPreviewVideoError(true)}
               />
             )}
@@ -896,7 +826,7 @@ const MediaDetail: React.FC = () => {
               <Button icon={<CheckCircleOutlined />} onClick={handleToggleWatched}>
                 {isWatched ? '标记未看' : '标记已看'}
               </Button>
-              <Button icon={<AppstoreAddOutlined />} onClick={openCollectionModal}>
+              <Button icon={<AppstoreAddOutlined />} onClick={() => setCollectionOpen(true)}>
                 加入合集
               </Button>
               {access.canEditMetadata && (
@@ -963,36 +893,11 @@ const MediaDetail: React.FC = () => {
         </Form>
       </Modal>
 
-      <Modal
-        title="加入合集"
+      <AddToCollectionModal
         open={collectionOpen}
-        onCancel={() => setCollectionOpen(false)}
-        onOk={handleAddToCollection}
-        confirmLoading={collectionSaving}
-        okText="加入"
-      >
-        <div style={{ display: 'grid', gap: 16, marginTop: 16 }}>
-          <Select
-            allowClear
-            placeholder="选择已有合集"
-            value={selectedCollectionId}
-            onChange={setSelectedCollectionId}
-            options={collections
-              .filter((collection) => !collection.smart)
-              .map((collection) => ({
-                label: `${collection.name} (${collection.itemCount || 0})`,
-                value: collection.id,
-              }))}
-          />
-          <Input
-            placeholder="或输入新合集名称"
-            value={newCollectionName}
-            onChange={(event) => setNewCollectionName(event.target.value)}
-            disabled={selectedCollectionId != null}
-            maxLength={128}
-          />
-        </div>
-      </Modal>
+        itemIds={[numericId]}
+        onClose={() => setCollectionOpen(false)}
+      />
 
       <SubtitleSearchModal
         itemId={numericId}

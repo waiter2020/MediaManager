@@ -18,6 +18,7 @@ export interface VideoPlayerProps {
   activeSubtitleIndex?: number | null;
   startTime?: number;
   mediaStartOffset?: number;
+  durationSeconds?: number;
   onSeekRequest?: (absoluteSeconds: number) => void;
   onProgress?: (seconds: number) => void;
   onError?: (message: string) => void;
@@ -34,19 +35,19 @@ export interface VideoSubtitleTrack {
 
 function applySubtitleSelection(
   video: HTMLVideoElement | null,
-  trackCount: number,
+  managedTracks: TextTrack[],
   activeSubtitleIndex: number | null | undefined,
 ) {
-  if (!video?.textTracks || trackCount <= 0) {
+  if (!video?.textTracks || managedTracks.length <= 0) {
     return;
   }
-  for (let i = 0; i < video.textTracks.length; i += 1) {
+  managedTracks.forEach((track, index) => {
     if (activeSubtitleIndex == null) {
-      video.textTracks[i].mode = 'disabled';
+      track.mode = 'disabled';
     } else {
-      video.textTracks[i].mode = i === activeSubtitleIndex ? 'showing' : 'disabled';
+      track.mode = index === activeSubtitleIndex ? 'showing' : 'disabled';
     }
-  }
+  });
 }
 
 type PlayerWithControls = Player & {
@@ -56,6 +57,19 @@ type PlayerWithControls = Player & {
   fullscreen?: () => void;
   play?: () => Promise<void> | void;
   pause?: () => void;
+};
+
+type ProgressSeekData = {
+  currentTime?: number;
+  percent?: number;
+};
+
+type PlayerWithHooks = Player & {
+  usePluginHooks?: (
+    pluginName: string,
+    hookName: string,
+    handler: (plugin: unknown, event: unknown, data: ProgressSeekData) => boolean | void,
+  ) => void;
 };
 
 function appendToken(url: string): string {
@@ -81,6 +95,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   activeSubtitleIndex,
   startTime = 0,
   mediaStartOffset = 0,
+  durationSeconds,
   onSeekRequest,
   onProgress,
   onError,
@@ -88,11 +103,13 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
+  const managedTextTracksRef = useRef<TextTrack[]>([]);
   const onProgressRef = useRef(onProgress);
   const onErrorRef = useRef(onError);
   const onBufferingChangeRef = useRef(onBufferingChange);
   const onSeekRequestRef = useRef(onSeekRequest);
   const mediaStartOffsetRef = useRef(mediaStartOffset);
+  const durationSecondsRef = useRef(durationSeconds);
   const lastAbsoluteTimeRef = useRef(mediaStartOffset);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
   const effectiveAutoplay = autoplay && !autoplayDisabled;
@@ -119,6 +136,10 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [mediaStartOffset]);
 
   useEffect(() => {
+    durationSecondsRef.current = durationSeconds;
+  }, [durationSeconds]);
+
+  useEffect(() => {
     const silentRefresh = async () => {
       try {
         await refreshStreamToken();
@@ -143,7 +164,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let onKeyDown: ((ev: KeyboardEvent) => void) | null = null;
     let onTimeUpdate: (() => void) | null = null;
     let onPlayError: (() => void) | null = null;
-    let onSeeking: (() => void) | null = null;
     let errorReportTimer: ReturnType<typeof setTimeout> | null = null;
     let clearRecoveryHandlers: (() => void) | null = null;
 
@@ -208,10 +228,67 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         width: '100%',
         height: fill ? '100%' : undefined,
         lang: 'zh-cn',
+        isLive: mode === 'hls' ? false : undefined,
+        customDuration:
+          mode === 'hls' && durationSeconds != null && durationSeconds > 0 ? durationSeconds : undefined,
+        timeOffset: mode === 'hls' && mediaStartOffset > 0 ? mediaStartOffset : undefined,
         plugins: mode === 'hls' ? [HlsPlugin] : [],
-        hls: mode === 'hls' ? { retryCount: 3 } : undefined,
+        hlsvod:
+          mode === 'hls'
+            ? {
+                retryCount: 3,
+                preloadTime: 30,
+              }
+            : undefined,
       });
       playerRef.current = player;
+
+      const resolveProgressSeekTarget = (data: ProgressSeekData): number | null => {
+        const totalDuration = durationSecondsRef.current;
+        let targetAbsolute: number | null = null;
+        if (typeof data.currentTime === 'number' && Number.isFinite(data.currentTime)) {
+          targetAbsolute = Math.floor(data.currentTime);
+        } else if (typeof data.percent === 'number' && totalDuration != null && totalDuration > 0) {
+          targetAbsolute = Math.floor(data.percent * totalDuration);
+        }
+        if (targetAbsolute == null) {
+          return null;
+        }
+        targetAbsolute = Math.max(0, targetAbsolute);
+        if (totalDuration != null && totalDuration > 0) {
+          targetAbsolute = Math.min(targetAbsolute, totalDuration);
+        }
+        return targetAbsolute;
+      };
+
+      const registerProgressSeekHooks = () => {
+        if (mode !== 'hls' || !onSeekRequestRef.current) {
+          return;
+        }
+        const hookedPlayer = player as PlayerWithHooks;
+        if (typeof hookedPlayer.usePluginHooks !== 'function') {
+          return;
+        }
+        const handleProgressSeek = (_plugin: unknown, _event: unknown, data: ProgressSeekData) => {
+          const seekHandler = onSeekRequestRef.current;
+          if (!seekHandler) {
+            return false;
+          }
+          const targetAbsolute = resolveProgressSeekTarget(data);
+          if (targetAbsolute == null) {
+            return false;
+          }
+          if (Math.abs(targetAbsolute - lastAbsoluteTimeRef.current) < 1) {
+            return false;
+          }
+          lastAbsoluteTimeRef.current = targetAbsolute;
+          seekHandler(targetAbsolute);
+          return false;
+        };
+        hookedPlayer.usePluginHooks('progress', 'click', handleProgressSeek);
+        hookedPlayer.usePluginHooks('progress', 'dragend', handleProgressSeek);
+      };
+      registerProgressSeekHooks();
 
       const tryAutoplay = () => {
         if (!effectiveAutoplay || !player) return;
@@ -223,6 +300,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const video = containerRef.current?.querySelector('video');
         if (!video) return;
         video.querySelectorAll('track[data-mediamanager-subtitle="true"]').forEach((track) => track.remove());
+        managedTextTracksRef.current = [];
         subtitles.forEach((subtitle, index) => {
           const track = document.createElement('track');
           track.kind = 'subtitles';
@@ -233,6 +311,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           track.dataset.mediamanagerSubtitle = 'true';
           video.appendChild(track);
         });
+        managedTextTracksRef.current = Array.from(
+          video.querySelectorAll('track[data-mediamanager-subtitle="true"]'),
+        )
+          .map((element) => (element as HTMLTrackElement).track)
+          .filter((textTrack): textTrack is TextTrack => textTrack != null);
         const defaultIndex = subtitles.findIndex((track) => track.defaultTrack);
         const resolvedIndex =
           activeSubtitleIndex != null
@@ -242,7 +325,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
               : subtitles.length > 0
                 ? 0
                 : null;
-        applySubtitleSelection(video, subtitles.length, resolvedIndex);
+        applySubtitleSelection(video, managedTextTracksRef.current, resolvedIndex);
       };
       attachSubtitles();
       player.once('loadedmetadata', attachSubtitles);
@@ -265,19 +348,6 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       };
       player.on('timeupdate', onTimeUpdate);
-
-      if (mode === 'hls' && onSeekRequestRef.current) {
-        onSeeking = () => {
-          const seekHandler = onSeekRequestRef.current;
-          if (!seekHandler || !player) return;
-          const targetAbsolute = mediaStartOffsetRef.current + (player.currentTime || 0);
-          if (Math.abs(targetAbsolute - lastAbsoluteTimeRef.current) > 2) {
-            lastAbsoluteTimeRef.current = targetAbsolute;
-            seekHandler(Math.max(0, Math.floor(targetAbsolute)));
-          }
-        };
-        player.on('seeking', onSeeking);
-      }
 
       player.on('waiting', () => setBuffering(true));
       player.on('canplay', () => {
@@ -311,7 +381,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         } else if (ev.code === 'ArrowLeft') {
           ev.preventDefault();
           if (mode === 'hls' && onSeekRequestRef.current) {
-            const target = Math.max(0, mediaStartOffsetRef.current + (p.currentTime || 0) - 10);
+            const current = mediaStartOffsetRef.current + (p.currentTime || 0);
+            const target = Math.max(0, Math.floor(current - 10));
             onSeekRequestRef.current(target);
           } else {
             p.currentTime = Math.max(0, (p.currentTime || 0) - 10);
@@ -319,7 +390,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         } else if (ev.code === 'ArrowRight') {
           ev.preventDefault();
           if (mode === 'hls' && onSeekRequestRef.current) {
-            const target = mediaStartOffsetRef.current + (p.currentTime || 0) + 10;
+            const current = mediaStartOffsetRef.current + (p.currentTime || 0);
+            const maxDuration = durationSecondsRef.current;
+            const target =
+              maxDuration != null && maxDuration > 0
+                ? Math.min(maxDuration, Math.floor(current + 10))
+                : Math.floor(current + 10);
             onSeekRequestRef.current(target);
           } else {
             p.currentTime = (p.currentTime || 0) + 10;
@@ -353,18 +429,15 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (onTimeUpdate) {
           player.off('timeupdate', onTimeUpdate);
         }
-        if (onSeeking) {
-          player.off('seeking', onSeeking);
-        }
         player.destroy();
       }
       playerRef.current = null;
     };
-  }, [src, mode, poster, effectiveAutoplay, fill, subtitles, activeSubtitleIndex, startTime, mediaStartOffset, onSeekRequest]);
+  }, [src, mode, poster, effectiveAutoplay, fill, subtitles, activeSubtitleIndex, startTime, mediaStartOffset, durationSeconds, onSeekRequest]);
 
   useEffect(() => {
     const video = containerRef.current?.querySelector('video');
-    applySubtitleSelection(video, subtitles.length, activeSubtitleIndex);
+    applySubtitleSelection(video, managedTextTracksRef.current, activeSubtitleIndex);
   }, [activeSubtitleIndex, subtitles.length]);
 
   return (

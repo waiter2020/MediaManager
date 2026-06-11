@@ -107,17 +107,30 @@ deploy:
 
 ### Intel 核显（QSV / VA-API）
 
+**两步缺一不可**：① 重建镜像（Intel：`intel-media-driver`；AMD：`mesa-va-gallium` + `mesa-dri-gallium`）② 在 `docker-compose.yml` 取消注释 GPU 块并 `docker compose up -d`。
+
 挂载 DRI 设备并加入 `video`/`render` 组：
 
 ```yaml
 environment:
-  - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=vaapi
+  - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=auto
   - MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE=/dev/dri/renderD128
 devices:
   - /dev/dri:/dev/dri
 group_add:
   - video
-  - render
+  - render   # 若仍报 I/O error，改为宿主机 render 组 GID：getent group render
+```
+
+容器内可自检：
+
+```bash
+# Intel
+vainfo --display drm --device /dev/dri/renderD128
+
+# AMD
+LIBVA_DRIVER_NAME=radeonsi vainfo --display drm --device /dev/dri/renderD128
+ls /usr/lib/dri/radeonsi_drv_video.so   # 需 mesa-va-gallium 包提供
 ```
 
 ### 无 GPU

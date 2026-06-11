@@ -8,7 +8,7 @@
     "postinstall": "max setup",
     "setup": "max setup",
     "start": "npm run dev",
-    "test": "tsx --test src/utils/authSession.test.ts",
+    "test": "tsx --test src/utils/authSession.test.ts src/utils/streamOrigin.test.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium"
@@ -16,8 +16,10 @@
   "dependencies": {
     "@ant-design/icons": "^5.3.6",
     "@ant-design/pro-components": "^2.7.0",
+    "@cp949/react-wordcloud": "^1.0.1",
     "@umijs/max": "^4.1.6",
     "antd": "^5.15.2",
+    "hls.js": "^1.5.15",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "xgplayer": "^3.0.20",

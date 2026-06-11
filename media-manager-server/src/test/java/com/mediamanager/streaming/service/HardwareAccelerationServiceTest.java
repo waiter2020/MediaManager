@@ -5,17 +5,22 @@ import com.mediamanager.system.service.SysConfigService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -30,9 +35,11 @@ class HardwareAccelerationServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "yamlFfmpegPath", "ffmpeg");
-        ReflectionTestUtils.setField(service, "yamlHardwareEncoder", "h264_nvenc");
+        ReflectionTestUtils.setField(service, "yamlHardwareEncoder", "");
         ReflectionTestUtils.setField(service, "yamlHardwareAcceleration", "auto");
         ReflectionTestUtils.setField(service, "yamlHardwareDevice", "/dev/dri/renderD128");
+        lenient().when(sysConfigService.getString(eq("playback.hardware_encoder"), eq("")))
+                .thenReturn("");
     }
 
     @Test
@@ -45,6 +52,35 @@ class HardwareAccelerationServiceTest {
 
         assertThat(resolved.resolvedType()).isEqualTo(HardwareAccelerationType.NVENC);
         assertThat(resolved.encoderName()).isEqualTo("h264_nvenc");
+        assertThat(resolved.available()).isTrue();
+    }
+
+    @Test
+    void autoCandidatesSkipQsvOnAmdGpu() {
+        Map<String, Boolean> encoders = baselineEncoders();
+        encoders.put("h264_nvenc", true);
+        encoders.put("h264_qsv", true);
+        encoders.put("h264_vaapi", true);
+        encoders.put("h264_amf", true);
+
+        var candidates = service.autoCandidates(encoders, HardwareAccelerationService.GpuVendor.AMD);
+
+        assertThat(candidates).containsExactly(
+                HardwareAccelerationType.NVENC,
+                HardwareAccelerationType.VAAPI,
+                HardwareAccelerationType.AMF);
+    }
+
+    @Test
+    void autoResolvesToQsvWhenBothQsvAndVaapiAvailable() {
+        Map<String, Boolean> encoders = baselineEncoders();
+        encoders.put("h264_qsv", true);
+        encoders.put("h264_vaapi", true);
+
+        var resolved = service.resolve(HardwareAccelerationType.AUTO, encoders, "/dev/dri/renderD128");
+
+        assertThat(resolved.resolvedType()).isEqualTo(HardwareAccelerationType.QSV);
+        assertThat(resolved.encoderName()).isEqualTo("h264_qsv");
         assertThat(resolved.available()).isTrue();
     }
 
@@ -90,7 +126,7 @@ class HardwareAccelerationServiceTest {
 
     @Test
     void encoderOverrideIgnoredForAutoMode() {
-        when(sysConfigService.getString("playback.hardware_encoder", "h264_nvenc")).thenReturn("custom_encoder");
+        when(sysConfigService.getString("playback.hardware_encoder", "")).thenReturn("custom_encoder");
 
         var resolved = service.resolve(HardwareAccelerationType.AUTO, baselineEncoders(), "/dev/dri/renderD128");
 
@@ -100,11 +136,50 @@ class HardwareAccelerationServiceTest {
 
     @Test
     void encoderOverrideUsedForExplicitNvencMode() {
-        when(sysConfigService.getString("playback.hardware_encoder", "h264_nvenc")).thenReturn("custom_encoder");
+        when(sysConfigService.getString("playback.hardware_encoder", "")).thenReturn("custom_encoder");
 
         var resolved = service.resolve(HardwareAccelerationType.NVENC, baselineEncoders(), "/dev/dri/renderD128");
 
         assertThat(resolved.encoderName()).isEqualTo("custom_encoder");
+    }
+
+    @Test
+    void resolveAccessibleDevicePathUsesReadableConfiguredPath(@TempDir Path temp) throws Exception {
+        Path device = temp.resolve("renderD128");
+        Files.createFile(device);
+
+        List<String> warnings = new ArrayList<>();
+        String resolved = service.resolveAccessibleDevicePath(device.toString(), warnings);
+
+        assertThat(resolved).isEqualTo(device.toString());
+        assertThat(warnings).isEmpty();
+        assertThat(service.isVaapiDeviceAccessible(device.toString())).isTrue();
+    }
+
+    @Test
+    void resolveAccessibleDevicePathWarnsWhenConfiguredPathMissing(@TempDir Path temp) {
+        List<String> warnings = new ArrayList<>();
+        String missing = temp.resolve("missing-render").toString();
+
+        String resolved = service.resolveAccessibleDevicePath(missing, warnings);
+
+        assertThat(resolved).isEqualTo(missing);
+        assertThat(warnings).anyMatch(warning -> warning.contains("未找到 GPU 设备路径"));
+    }
+
+    @Test
+    void appendQsvInputArgsUsesHwaccelMode() {
+        var hw = new HardwareAccelerationService.ResolvedHardwareAcceleration(
+                HardwareAccelerationType.QSV,
+                HardwareAccelerationType.QSV,
+                "h264_qsv",
+                "/dev/dri/renderD128",
+                HardwareAccelerationService.QsvInitMode.HWACCEL);
+
+        List<String> inputArgs = new ArrayList<>();
+        service.appendHardwareInputArgs(inputArgs, hw);
+
+        assertThat(inputArgs).containsExactly("-hwaccel", "qsv", "-qsv_device", "/dev/dri/renderD128");
     }
 
     @Test

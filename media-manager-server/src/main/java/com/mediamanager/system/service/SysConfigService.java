@@ -59,7 +59,7 @@ public class SysConfigService {
     @Value("${mediamanager.playback.hardware-device:/dev/dri/renderD128}")
     private String yamlHardwareDevice;
 
-    @Value("${mediamanager.playback.hardware-encoder:h264_nvenc}")
+    @Value("${mediamanager.playback.hardware-encoder:}")
     private String yamlHardwareEncoder;
 
     @Value("${mediamanager.ai.ollama.base-url:http://localhost:11434}")

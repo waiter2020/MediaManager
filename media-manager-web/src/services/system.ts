@@ -62,6 +62,7 @@ export interface SystemCapabilities {
   hardwareEncoderAvailable?: boolean;
   hardwareAccelerationWarnings?: string[];
   hardwareEncodersAvailable?: Record<string, boolean>;
+  streamAuxPorts?: number[];
 }
 
 export interface SystemLogEvent {

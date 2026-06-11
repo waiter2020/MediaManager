@@ -15,4 +15,6 @@ public interface MediaSubtitleRepository extends JpaRepository<MediaSubtitle, In
     List<MediaSubtitle> findByMediaFileIdOrderByLanguageAscFileNameAsc(Integer mediaFileId);
 
     List<MediaSubtitle> findByMediaFileIdAndSourceOrderByLanguageAscFileNameAsc(Integer mediaFileId, String source);
+
+    boolean existsByMediaItemId(Integer mediaItemId);
 }

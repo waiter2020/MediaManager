@@ -70,6 +70,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -131,6 +133,7 @@ public class MediaItemService {
             Integer minYear,
             Integer maxYear,
             Double minRating,
+            Boolean hasSubtitle,
             int page,
             int size,
             String sortField,
@@ -140,7 +143,7 @@ public class MediaItemService {
         
         Set<Integer> libraryIds = libraryAccessService.resolveLibraryFilter(libraryId);
         Specification<MediaItem> spec = MediaItemSpecification.filterBy(
-                libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating);
+                libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, hasSubtitle);
         
         Page<MediaItem> itemPage = itemRepository.findAll(spec, pageRequest);
         
@@ -601,6 +604,47 @@ public class MediaItemService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.MEDIA_ITEM_NOT_FOUND));
         libraryAccessService.assertCanDeleteItem(item);
         mediaFileLifecycleService.softDeleteActiveFiles(item);
+    }
+
+    public Map<String, Object> deleteBatch(List<Integer> itemIds, boolean deleteSourceFile) {
+        if (itemIds == null || itemIds.isEmpty()) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "itemIds cannot be empty");
+        }
+        if (itemIds.size() > 100) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "At most 100 items can be deleted at once");
+        }
+        if (deleteSourceFile && !hasGlobalAuthority("media:delete_file")) {
+            throw new BusinessException(ErrorCode.INVALID_PARAMETER, "media:delete_file permission required");
+        }
+
+        int succeeded = 0;
+        int failed = 0;
+        for (Integer id : itemIds) {
+            try {
+                if (deleteSourceFile) {
+                    deleteSourceFile(id);
+                } else {
+                    deleteItem(id);
+                }
+                succeeded++;
+            } catch (Exception e) {
+                failed++;
+                log.warn("Batch delete failed for item {}: {}", id, e.getMessage());
+            }
+        }
+        return Map.of(
+                "requested", itemIds.size(),
+                "succeeded", succeeded,
+                "failed", failed);
+    }
+
+    private boolean hasGlobalAuthority(String authority) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || authority == null) {
+            return false;
+        }
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> authority.equals(a.getAuthority()));
     }
 
     @Transactional

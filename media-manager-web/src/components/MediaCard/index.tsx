@@ -9,9 +9,13 @@ import {
   PlayCircleFilled,
   VideoCameraOutlined,
 } from '@ant-design/icons';
-import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
+import { PREVIEW_HOVER_DELAY_MS, PREVIEW_VIEWPORT_ROOT_MARGIN } from '@/constants/mediaPreview';
+import MediaPreviewVideo from '@/components/MediaPreviewVideo';
+import { resolveItemPosterUrl } from '@/services/stream';
+import { useInViewport } from '@/utils/useInViewport';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
-import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
+import { usePageVisibility } from '@/utils/usePageVisibility';
+import { useMediaCardPreviewVisibilityRoot } from './previewVisibilityContext';
 import './index.css';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -77,8 +81,17 @@ const MediaCard: React.FC<MediaCardProps> = ({
   const [imgError, setImgError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [previewVideoError, setPreviewVideoError] = useState(false);
-  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasInViewportRef = useRef(false);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
+  const isPageVisible = usePageVisibility();
+  const previewVisibilityRoot = useMediaCardPreviewVisibilityRoot();
+  const usesAlwaysPreview = !autoplayDisabled && previewMode === 'always';
+  const { ref: viewportRef, isInViewport } = useInViewport({
+    root: previewVisibilityRoot,
+    rootMargin: PREVIEW_VIEWPORT_ROOT_MARGIN,
+    disabled: !usesAlwaysPreview,
+  });
 
   const posterUrl = resolveItemPosterUrl({
     itemId: id,
@@ -87,14 +100,17 @@ const MediaCard: React.FC<MediaCardProps> = ({
     fileIds,
     thumbnailWidth: 300,
   });
-  const previewVideoUrl = fileIds?.length ? getFileStreamUrl(fileIds[0]) : null;
+  const previewFileId = fileIds?.length ? fileIds[0] : null;
   const year = releaseDate ? releaseDate.substring(0, 4) : null;
   const isVideo = PREVIEWABLE_TYPES.has(type || '');
   const effectivePreviewMode = autoplayDisabled ? 'none' : previewMode;
   const showPlayIcon = isVideo || type === 'AUDIO';
   const shouldShowPreview =
-    isVideo && effectivePreviewMode !== 'none' && (effectivePreviewMode === 'always' || isHovered);
-  const shouldShowVideoPreview = shouldShowPreview && !!previewVideoUrl && !previewVideoError;
+    isVideo &&
+    effectivePreviewMode !== 'none' &&
+    ((effectivePreviewMode === 'always' && isInViewport && isPageVisible) ||
+      (effectivePreviewMode === 'hover' && isHovered));
+  const shouldShowVideoPreview = shouldShowPreview && previewFileId != null && !previewVideoError;
   const progress = typeof playbackPercent === 'number' ? Math.max(0, Math.min(100, playbackPercent)) : 0;
   const showProgress = showPlayIcon && progress > 0 && progress < 95 && !watched;
   const relatedChips = [
@@ -121,23 +137,14 @@ const MediaCard: React.FC<MediaCardProps> = ({
 
   useEffect(() => {
     setPreviewVideoError(false);
-  }, [id, previewVideoUrl]);
+  }, [id, previewFileId]);
 
   useEffect(() => {
-    const video = previewVideoRef.current;
-    if (!video) return;
-
-    if (shouldShowVideoPreview) return;
-
-    video.pause();
-    if (effectivePreviewMode === 'hover') {
-      try {
-        video.currentTime = 0;
-      } catch {
-        // Some browsers disallow seeking until metadata is available.
-      }
+    if (usesAlwaysPreview && isInViewport && !wasInViewportRef.current && previewVideoError) {
+      setPreviewVideoError(false);
     }
-  }, [effectivePreviewMode, previewVideoUrl, shouldShowVideoPreview]);
+    wasInViewportRef.current = isInViewport;
+  }, [usesAlwaysPreview, isInViewport, previewVideoError]);
 
   const handlePlayClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -147,12 +154,43 @@ const MediaCard: React.FC<MediaCardProps> = ({
     [onPlay],
   );
 
+  const handleMouseEnter = useCallback(() => {
+    if (effectivePreviewMode !== 'hover') {
+      return;
+    }
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+    }
+    hoverTimerRef.current = setTimeout(() => {
+      hoverTimerRef.current = null;
+      setIsHovered(true);
+    }, PREVIEW_HOVER_DELAY_MS);
+  }, [effectivePreviewMode]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setIsHovered(false);
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+      }
+    },
+    [],
+  );
+
   return (
     <div
+      ref={viewportRef}
       className="media-card-wrapper"
       onClick={onClick}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       <div className="media-card-poster">
         {posterUrl && !imgError ? (
@@ -171,20 +209,11 @@ const MediaCard: React.FC<MediaCardProps> = ({
           </div>
         )}
 
-        {shouldShowVideoPreview && (
-          <video
-            ref={previewVideoRef}
-            src={previewVideoUrl || undefined}
+        {previewFileId != null && (
+          <MediaPreviewVideo
+            fileId={previewFileId}
+            active={shouldShowVideoPreview}
             className={`media-card-preview-video${effectivePreviewMode === 'always' ? ' is-autoplay' : ''}`}
-            muted
-            playsInline
-            preload="metadata"
-            onLoadedMetadata={(event) => {
-              playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPreviewVideoError(true));
-            }}
-            onEnded={(event) => {
-              playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => setPreviewVideoError(true));
-            }}
             onError={() => setPreviewVideoError(true)}
           />
         )}

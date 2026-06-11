@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
-import type { ActionType, ProColumns } from '@ant-design/pro-components';
+import type { ProColumns } from '@ant-design/pro-components';
 import {
   Alert,
   Button,
@@ -12,6 +12,7 @@ import {
   Modal,
   Popconfirm,
   Progress,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -20,7 +21,14 @@ import {
   Typography,
   message,
 } from 'antd';
-import { PlusOutlined, RobotOutlined, StopOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  CloudOutlined,
+  PlusOutlined,
+  RobotOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons';
 import { history, useAccess } from '@umijs/max';
 import {
   applyAiOrganization,
@@ -49,10 +57,10 @@ import {
 } from '@/services/classification';
 import { getLibraries } from '@/services/library';
 import type { MediaLibrary } from '@/types/library';
+import TagWordCloud from '@/components/TagWordCloud';
 
 const TagsManagement: React.FC = () => {
   const access = useAccess();
-  const actionRef = useRef<ActionType>();
   const previewDebounceRef = useRef<number>();
   const lastOrganizationFinishedAtRef = useRef<number>();
   const [modalVisible, setModalVisible] = useState(false);
@@ -81,6 +89,9 @@ const TagsManagement: React.FC = () => {
   const [organizationPreview, setOrganizationPreview] = useState<AiOrganizationResponse | null>(null);
   const [organizationStatus, setOrganizationStatus] = useState<AiOrganizationJobStatus | null>(null);
   const [classifyStatus, setClassifyStatus] = useState<LibraryClassifyStatus | null>(null);
+  const [viewMode, setViewMode] = useState<'table' | 'wordcloud'>('table');
+  const [tags, setTags] = useState<TagItem[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
 
   const buildOrganizationRequest = (
     overrides?: Partial<AiOrganizationRequest>,
@@ -108,6 +119,26 @@ const TagsManagement: React.FC = () => {
       setLibraries(res.data || []);
     }
   };
+
+  const loadTags = async () => {
+    setTagsLoading(true);
+    try {
+      const res = await getTags();
+      const data = res.code === 200 ? res.data || [] : [];
+      setTags(data);
+      return { data, success: res.code === 200 };
+    } finally {
+      setTagsLoading(false);
+    }
+  };
+
+  const reloadTags = () => {
+    void loadTags();
+  };
+
+  useEffect(() => {
+    void loadTags();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -140,7 +171,7 @@ const TagsManagement: React.FC = () => {
         ) {
           lastOrganizationFinishedAtRef.current = nextStatus.finishedAt;
           setOrganizationPreview(nextStatus.result);
-          actionRef.current?.reload();
+          reloadTags();
         }
       }
       if (classifyResult.status === 'fulfilled' && classifyResult.value.code === 200) {
@@ -293,7 +324,7 @@ const TagsManagement: React.FC = () => {
           onConfirm={async () => {
             await deleteTag(record.id);
             message.success('已删除');
-            actionRef.current?.reload();
+            reloadTags();
           }}
         >
           <a style={{ color: '#ff4d4f' }}>删除</a>
@@ -320,7 +351,7 @@ const TagsManagement: React.FC = () => {
     setModalVisible(false);
     setEditingTag(null);
     form.resetFields();
-    actionRef.current?.reload();
+    reloadTags();
   };
 
   const tagPreviewColumns = [
@@ -452,21 +483,29 @@ const TagsManagement: React.FC = () => {
         </Button>
       }
       >
-      <ProTable<TagItem>
-        actionRef={actionRef}
-        columns={columns}
-        rowKey="id"
-        search={false}
-        request={async () => {
-          const res = await getTags();
-          return { data: res.data || [], success: true };
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 16,
+          flexWrap: 'wrap',
+          gap: 12,
         }}
-        toolBarRender={() => [
-          <Button key="ai-organize" icon={<RobotOutlined />} onClick={openOrganizer}>
+      >
+        <Segmented
+          options={[
+            { value: 'table', icon: <UnorderedListOutlined /> },
+            { value: 'wordcloud', icon: <CloudOutlined /> },
+          ]}
+          value={viewMode}
+          onChange={(value) => setViewMode(value as 'table' | 'wordcloud')}
+        />
+        <Space>
+          <Button icon={<RobotOutlined />} onClick={openOrganizer}>
             AI 整理
-          </Button>,
+          </Button>
           <Button
-            key="create"
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
@@ -476,9 +515,21 @@ const TagsManagement: React.FC = () => {
             }}
           >
             新建标签
-          </Button>,
-        ]}
-      />
+          </Button>
+        </Space>
+      </div>
+      {viewMode === 'table' ? (
+        <ProTable<TagItem>
+          columns={columns}
+          rowKey="id"
+          search={false}
+          loading={tagsLoading}
+          dataSource={tags}
+          toolBarRender={false}
+        />
+      ) : (
+        <TagWordCloud tags={tags} loading={tagsLoading} />
+      )}
       <Modal
         title={editingTag ? '编辑标签' : '新建标签'}
         open={modalVisible}

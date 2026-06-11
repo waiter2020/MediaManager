@@ -84,7 +84,11 @@ RUN if [ "$MIRROR_PROFILE" = "cn" ]; then \
         "https://${ALPINE_MIRROR_HOST}/alpine/v${ver}/community" \
         > /etc/apk/repositories; \
     fi && \
-    apk add --no-cache ffmpeg nginx postgresql su-exec curl && \
+    apk add --no-cache \
+      ffmpeg nginx postgresql su-exec curl \
+      libva libva-utils \
+      intel-media-driver libva-intel-driver \
+      mesa-dri-gallium mesa-va-gallium && \
     ln -sf /dev/stdout /var/log/nginx/access.log && \
     ln -sf /dev/stderr /var/log/nginx/error.log && \
     mkdir -p /run/nginx /run/postgresql /app/data/postgres && \
@@ -96,8 +100,9 @@ COPY --from=backend-builder /app/target/media-manager.jar /app/app.jar
 COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY nginx/stream-proxy.conf /etc/nginx/stream-proxy.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 80
+EXPOSE 80 50000 50001 50002
 ENTRYPOINT ["/entrypoint.sh"]

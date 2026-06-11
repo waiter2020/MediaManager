@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
+  Checkbox,
   Drawer,
   InputNumber,
   Modal,
@@ -14,6 +15,7 @@ import {
   message,
 } from 'antd';
 import {
+  AppstoreAddOutlined,
   AppstoreOutlined,
   CloseOutlined,
   CustomerServiceOutlined,
@@ -26,17 +28,24 @@ import {
 } from '@ant-design/icons';
 import { history, useAccess, useLocation } from '@umijs/max';
 import { batchAddTags } from '@/services/classification';
-import { classifyBatch, getFilters, getItems, type CategoryFilter } from '@/services/media';
+import {
+  classifyBatch,
+  deleteItemsBatch,
+  getFilters,
+  getItems,
+  type CategoryFilter,
+} from '@/services/media';
 import { getLibraries } from '@/services/library';
 import { searchUnified } from '@/services/search';
-import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
+import MediaPreviewVideo from '@/components/MediaPreviewVideo';
+import { resolveItemPosterUrl } from '@/services/stream';
+import AddToCollectionModal from '@/components/AddToCollectionModal';
 import EmptyState from '@/components/EmptyState';
 import MediaCard from '@/components/MediaCard';
 import { PC_MEDIA_CARD_PREVIEW_MODE } from '@/constants/mediaPreview';
 import UnifiedSearchBox from '@/components/UnifiedSearchBox';
 import { openPlayerWindow } from '@/utils/playerWindow';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
-import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaItem } from '@/types/media';
 import type { MediaLibrary } from '@/types/library';
 import './Browse.css';
@@ -71,6 +80,8 @@ const SORT_OPTIONS = [
 ];
 
 const PREVIEWABLE_TYPES = new Set(['MOVIE', 'TV_SHOW', 'EPISODE']);
+
+const SINGLE_LIBRARY_TYPES = new Set(['MOVIE', 'TV_SHOW', 'IMAGE', 'AUDIO']);
 
 function flattenCategories(nodes: CategoryFilter[] = [], result: FlatCategory[] = []): FlatCategory[] {
   nodes.forEach((node) => {
@@ -135,12 +146,17 @@ const MediaBrowse: React.FC = () => {
   const [minYear, setMinYear] = useState<number | undefined>();
   const [maxYear, setMaxYear] = useState<number | undefined>();
   const [minRating, setMinRating] = useState<number>(0);
+  const [hasSubtitle, setHasSubtitle] = useState<boolean | undefined>(undefined);
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedItemIds, setSelectedItemIds] = useState<number[]>([]);
   const [batchTagOpen, setBatchTagOpen] = useState(false);
   const [batchTagIds, setBatchTagIds] = useState<number[]>([]);
   const [batchTagLoading, setBatchTagLoading] = useState(false);
   const [batchClassifyLoading, setBatchClassifyLoading] = useState(false);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchDeleteSourceFile, setBatchDeleteSourceFile] = useState(false);
+  const [batchDeleteLoading, setBatchDeleteLoading] = useState(false);
+  const [collectionOpen, setCollectionOpen] = useState(false);
   const [listPreviewItemId, setListPreviewItemId] = useState<number | null>(null);
   const [listPreviewVideoErrors, setListPreviewVideoErrors] = useState<Record<number, boolean>>({});
   const autoplayDisabled = useIsMobileAutoplayDisabled();
@@ -148,6 +164,63 @@ const MediaBrowse: React.FC = () => {
   const [allTags, setAllTags] = useState<TagOption[]>([]);
   const [categories, setCategories] = useState<FlatCategory[]>([]);
   const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
+
+  const canBatchSelect =
+    access.canEditMetadata || access.canDeleteMedia || access.canViewMedia;
+
+  const syncBrowseUrl = useCallback(
+    (overrides?: { query?: string; libraryId?: number | null }) => {
+      const params = new URLSearchParams(location.search);
+      const nextQuery = overrides?.query !== undefined ? overrides.query : keyword;
+      const nextLibraryId =
+        overrides?.libraryId !== undefined ? overrides.libraryId : selectedLibraryId;
+
+      if (nextQuery.trim()) {
+        params.set('q', nextQuery.trim());
+      } else {
+        params.delete('q');
+      }
+      if (nextLibraryId != null) {
+        params.set('libraryId', String(nextLibraryId));
+      } else {
+        params.delete('libraryId');
+      }
+      if (selectedTags.length > 0) {
+        params.set('tagIds', selectedTags.join(','));
+      } else {
+        params.delete('tagIds');
+      }
+      if (selectedCategories.length > 0) {
+        params.set('categoryIds', selectedCategories.join(','));
+      } else {
+        params.delete('categoryIds');
+      }
+      const nextSearch = params.toString();
+      history.replace(nextSearch ? `/browse?${nextSearch}` : '/browse');
+    },
+    [keyword, location.search, selectedCategories, selectedLibraryId, selectedTags],
+  );
+
+  const applyLibraryTypeFilter = useCallback((libraryId: number | null) => {
+    if (libraryId == null) {
+      return;
+    }
+    const library = libraries.find((item) => item.id === libraryId);
+    if (library?.type && SINGLE_LIBRARY_TYPES.has(library.type)) {
+      setType(library.type);
+    }
+  }, [libraries]);
+
+  const handleLibrarySelect = useCallback(
+    (libraryId: number | null) => {
+      setSelectedLibraryId(libraryId);
+      setSelectedItemIds([]);
+      setPage(1);
+      applyLibraryTypeFilter(libraryId);
+      syncBrowseUrl({ libraryId });
+    },
+    [applyLibraryTypeFilter, syncBrowseUrl],
+  );
 
   useEffect(() => {
     setSelectedLibraryId(browseSearchState.libraryId);
@@ -173,6 +246,16 @@ const MediaBrowse: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (selectedLibraryId != null && libraries.length > 0) {
+      applyLibraryTypeFilter(selectedLibraryId);
+    }
+  }, [applyLibraryTypeFilter, libraries, selectedLibraryId]);
+
+  useEffect(() => {
+    setSelectedItemIds([]);
+  }, [page, keyword, type, sortBy, selectedLibraryId, selectedTags, selectedCategories, minYear, maxYear, minRating, hasSubtitle]);
+
   const fetchItems = useCallback(
     async (nextPage = page, nextPageSize = pageSize) => {
       const fetchId = latestFetchIdRef.current + 1;
@@ -190,6 +273,7 @@ const MediaBrowse: React.FC = () => {
             minYear,
             maxYear,
             minRating: minRating > 0 ? minRating : undefined,
+            hasSubtitle,
             page: nextPage,
             size: nextPageSize,
           });
@@ -212,6 +296,7 @@ const MediaBrowse: React.FC = () => {
           minYear,
           maxYear,
           minRating: minRating > 0 ? minRating : undefined,
+          hasSubtitle,
           page: nextPage,
           size: nextPageSize,
           sortField,
@@ -240,6 +325,7 @@ const MediaBrowse: React.FC = () => {
       minYear,
       maxYear,
       minRating,
+      hasSubtitle,
       page,
       pageSize,
     ],
@@ -248,7 +334,7 @@ const MediaBrowse: React.FC = () => {
   useEffect(() => {
     setPage(1);
     fetchItems(1);
-  }, [keyword, type, sortBy, selectedLibraryId, selectedTags, selectedCategories, minYear, maxYear, minRating]);
+  }, [keyword, type, sortBy, selectedLibraryId, selectedTags, selectedCategories, minYear, maxYear, minRating, hasSubtitle]);
 
   useEffect(() => {
     fetchItems(page);
@@ -260,7 +346,8 @@ const MediaBrowse: React.FC = () => {
     selectedCategories.length +
     (minYear != null ? 1 : 0) +
     (maxYear != null ? 1 : 0) +
-    (minRating > 0 ? 1 : 0);
+    (minRating > 0 ? 1 : 0) +
+    (hasSubtitle !== undefined ? 1 : 0);
 
   const tagOptions = allTags.map((tag) => ({ label: tag.name, value: tag.id }));
   const categoryOptions = categories.map((cat) => ({
@@ -280,38 +367,68 @@ const MediaBrowse: React.FC = () => {
     setMinYear(undefined);
     setMaxYear(undefined);
     setMinRating(0);
+    setHasSubtitle(undefined);
+    setSelectedItemIds([]);
+    setPage(1);
+    syncBrowseUrl({ libraryId: null });
   };
 
   const updateBrowseSearchUrl = (nextQuery: string) => {
-    const params = new URLSearchParams(location.search);
-    if (nextQuery.trim()) {
-      params.set('q', nextQuery.trim());
-    } else {
-      params.delete('q');
-    }
-    if (selectedLibraryId != null) {
-      params.set('libraryId', String(selectedLibraryId));
-    } else {
-      params.delete('libraryId');
-    }
-    if (selectedTags.length > 0) {
-      params.set('tagIds', selectedTags.join(','));
-    } else {
-      params.delete('tagIds');
-    }
-    if (selectedCategories.length > 0) {
-      params.set('categoryIds', selectedCategories.join(','));
-    } else {
-      params.delete('categoryIds');
-    }
-    const nextSearch = params.toString();
-    history.replace(nextSearch ? `/browse?${nextSearch}` : '/browse');
+    syncBrowseUrl({ query: nextQuery });
   };
 
   const toggleSelect = (id: number) => {
     setSelectedItemIds((prev) =>
       prev.includes(id) ? prev.filter((itemId) => itemId !== id) : [...prev, id],
     );
+  };
+
+  const selectAllOnPage = () => {
+    setSelectedItemIds(items.map((item) => item.id));
+  };
+
+  const clearSelection = () => {
+    setSelectedItemIds([]);
+  };
+
+  const allPageSelected =
+    items.length > 0 && items.every((item) => selectedItemIds.includes(item.id));
+
+  const renderSelectCheckbox = (id: number, className?: string) => {
+    if (!canBatchSelect) {
+      return null;
+    }
+    return (
+      <input
+        type="checkbox"
+        className={className}
+        checked={selectedItemIds.includes(id)}
+        onChange={() => toggleSelect(id)}
+        onClick={(event) => event.stopPropagation()}
+      />
+    );
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedItemIds.length === 0) {
+      return;
+    }
+    setBatchDeleteLoading(true);
+    try {
+      const res = await deleteItemsBatch(selectedItemIds, batchDeleteSourceFile);
+      if (res.code === 200) {
+        const data = res.data || {};
+        message.success(`删除完成：成功 ${data.succeeded ?? 0}，失败 ${data.failed ?? 0}`);
+        setBatchDeleteOpen(false);
+        setBatchDeleteSourceFile(false);
+        setSelectedItemIds([]);
+        fetchItems(page);
+      }
+    } catch {
+      message.error('批量删除失败');
+    } finally {
+      setBatchDeleteLoading(false);
+    }
   };
 
   const openItemPlayer = (item: MediaItem) => {
@@ -378,15 +495,7 @@ const MediaBrowse: React.FC = () => {
           className={selectedItemIds.includes(item.id) ? 'browse-card-selected' : ''}
           style={{ position: 'relative' }}
         >
-          {access.canEditMetadata && (
-            <input
-              type="checkbox"
-              checked={selectedItemIds.includes(item.id)}
-              onChange={() => toggleSelect(item.id)}
-              onClick={(e) => e.stopPropagation()}
-              style={{ position: 'absolute', top: 8, left: 8, zIndex: 2 }}
-            />
-          )}
+          {renderSelectCheckbox(item.id, 'browse-grid-checkbox')}
           <MediaCard
             id={item.id}
             title={item.title}
@@ -436,41 +545,35 @@ const MediaBrowse: React.FC = () => {
       {items.map((item) => {
         const listPosterUrl = getListPosterUrl(item);
         const canPreview = PREVIEWABLE_TYPES.has(item.type);
-        const previewVideoUrl = item.fileIds?.length ? getFileStreamUrl(item.fileIds[0]) : null;
+        const previewFileId = item.fileIds?.length ? item.fileIds[0] : null;
         const isPreviewActive = listPreviewItemId === item.id;
         const showVideoPreview =
-          !autoplayDisabled && canPreview && isPreviewActive && !!previewVideoUrl && !listPreviewVideoErrors[item.id];
+          !autoplayDisabled && canPreview && isPreviewActive && previewFileId != null && !listPreviewVideoErrors[item.id];
+        const isSelected = selectedItemIds.includes(item.id);
         return (
           <div
             key={item.id}
-            className="media-list-item"
+            className={`media-list-item${isSelected ? ' browse-list-item-selected' : ''}`}
             onClick={() => history.push(`/media/${item.id}`)}
             onMouseEnter={() => !autoplayDisabled && setListPreviewItemId(item.id)}
             onMouseLeave={() => setListPreviewItemId((current) => (current === item.id ? null : current))}
           >
+            {canBatchSelect && (
+              <div className="media-list-select" onClick={(event) => event.stopPropagation()}>
+                {renderSelectCheckbox(item.id, 'browse-list-checkbox')}
+              </div>
+            )}
             <div className="media-list-poster">
               {listPosterUrl ? (
                 <img className="media-list-poster-image" src={listPosterUrl} alt={item.title} />
               ) : (
                 <div className="media-list-poster-placeholder">{getPlaceholderIcon(item.type)}</div>
               )}
-              {showVideoPreview && (
-                <video
+              {previewFileId != null && (
+                <MediaPreviewVideo
+                  fileId={previewFileId}
+                  active={showVideoPreview}
                   className="media-list-preview-video"
-                  src={previewVideoUrl || undefined}
-                  muted
-                  playsInline
-                  preload="metadata"
-                  onLoadedMetadata={(event) => {
-                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
-                    });
-                  }}
-                  onEnded={(event) => {
-                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
-                    });
-                  }}
                   onError={() => {
                     setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
                   }}
@@ -500,7 +603,7 @@ const MediaBrowse: React.FC = () => {
   );
 
   return (
-    <div className="browse-page">
+    <div className={`browse-page${selectedItemIds.length > 0 ? ' browse-page-has-batch-bar' : ''}`}>
       <div className="browse-tabs">
         <Tabs
           activeKey={type}
@@ -517,6 +620,31 @@ const MediaBrowse: React.FC = () => {
           size="large"
         />
       </div>
+
+      {libraries.length > 0 && (
+        <div className="browse-library-chips">
+          <button
+            type="button"
+            className={`browse-library-chip${selectedLibraryId == null ? ' browse-library-chip-active' : ''}`}
+            onClick={() => handleLibrarySelect(null)}
+          >
+            全部
+          </button>
+          {libraries.map((library) => (
+            <button
+              key={library.id}
+              type="button"
+              className={`browse-library-chip${selectedLibraryId === library.id ? ' browse-library-chip-active' : ''}`}
+              onClick={() => handleLibrarySelect(library.id)}
+            >
+              <span>{library.name}</span>
+              {library.totalItems != null && (
+                <span className="browse-library-chip-count">{library.totalItems}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="browse-toolbar">
         <div className="browse-toolbar-left">
@@ -560,16 +688,6 @@ const MediaBrowse: React.FC = () => {
           )}
         </div>
         <div className="browse-toolbar-right">
-          {access.canEditMetadata && selectedItemIds.length > 0 && (
-            <>
-              <Button loading={batchClassifyLoading} onClick={handleBatchClassify}>
-                批量分类 ({selectedItemIds.length})
-              </Button>
-              <Button type="primary" onClick={() => setBatchTagOpen(true)}>
-                批量打标 ({selectedItemIds.length})
-              </Button>
-            </>
-          )}
           {access.canViewRecycleBin && (
             <Button icon={<DeleteOutlined />} onClick={() => history.push('/recycle-bin')}>
               回收站
@@ -600,7 +718,7 @@ const MediaBrowse: React.FC = () => {
             (() => {
               const lib = libraries.find((item) => item.id === selectedLibraryId);
               return lib ? (
-                <Tag closable onClose={() => setSelectedLibraryId(null)}>
+                <Tag closable onClose={() => handleLibrarySelect(null)}>
                   {lib.name}
                 </Tag>
               ) : null;
@@ -643,6 +761,11 @@ const MediaBrowse: React.FC = () => {
           {minRating > 0 && (
             <Tag closable onClose={() => setMinRating(0)}>
               评分 ≥ {minRating.toFixed(1)}
+            </Tag>
+          )}
+          {hasSubtitle !== undefined && (
+            <Tag closable onClose={() => setHasSubtitle(undefined)}>
+              {hasSubtitle ? '有字幕' : '无字幕'}
             </Tag>
           )}
         </div>
@@ -710,7 +833,7 @@ const MediaBrowse: React.FC = () => {
             style={{ width: '100%' }}
             options={libraryOptions}
             value={selectedLibraryId}
-            onChange={(v) => setSelectedLibraryId(v ?? null)}
+            onChange={(v) => handleLibrarySelect(v ?? null)}
           />
         </div>
         <div className="filter-section">
@@ -758,6 +881,25 @@ const MediaBrowse: React.FC = () => {
           </Space>
         </div>
         <div className="filter-section">
+          <div className="filter-label">字幕</div>
+          <Select
+            style={{ width: '100%' }}
+            value={hasSubtitle === undefined ? 'all' : hasSubtitle ? 'yes' : 'no'}
+            onChange={(value) => {
+              if (value === 'all') {
+                setHasSubtitle(undefined);
+              } else {
+                setHasSubtitle(value === 'yes');
+              }
+            }}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: '有字幕', value: 'yes' },
+              { label: '无字幕', value: 'no' },
+            ]}
+          />
+        </div>
+        <div className="filter-section">
           <div className="filter-label">
             最低评分{minRating > 0 ? ` ${minRating.toFixed(1)}` : ''}
           </div>
@@ -789,6 +931,74 @@ const MediaBrowse: React.FC = () => {
           onChange={setBatchTagIds}
         />
       </Modal>
+
+      <Modal
+        title={`删除 ${selectedItemIds.length} 项媒体`}
+        open={batchDeleteOpen}
+        onCancel={() => {
+          setBatchDeleteOpen(false);
+          setBatchDeleteSourceFile(false);
+        }}
+        onOk={handleBatchDelete}
+        confirmLoading={batchDeleteLoading}
+        okText="删除"
+        okButtonProps={{ danger: true }}
+      >
+        <div className="browse-batch-delete-content">
+          <p>默认将移入回收站，可在回收站中恢复。</p>
+          {access.canDeleteSourceFile && (
+            <Checkbox
+              checked={batchDeleteSourceFile}
+              onChange={(event) => setBatchDeleteSourceFile(event.target.checked)}
+            >
+              同时删除源文件（不可恢复）
+            </Checkbox>
+          )}
+        </div>
+      </Modal>
+
+      <AddToCollectionModal
+        open={collectionOpen}
+        itemIds={selectedItemIds}
+        onClose={() => setCollectionOpen(false)}
+        onSuccess={() => {
+          setSelectedItemIds([]);
+        }}
+      />
+
+      {selectedItemIds.length > 0 && (
+        <div className="browse-batch-bar">
+          <div className="browse-batch-bar-left">
+            <span className="browse-batch-count">已选 {selectedItemIds.length} 项</span>
+            <Button type="link" size="small" onClick={allPageSelected ? clearSelection : selectAllOnPage}>
+              {allPageSelected ? '取消全选' : '全选当前页'}
+            </Button>
+            <Button type="link" size="small" onClick={clearSelection}>
+              清除选择
+            </Button>
+          </div>
+          <div className="browse-batch-bar-actions">
+            {access.canEditMetadata && (
+              <>
+                <Button loading={batchClassifyLoading} onClick={handleBatchClassify}>
+                  批量分类
+                </Button>
+                <Button onClick={() => setBatchTagOpen(true)}>批量打标</Button>
+              </>
+            )}
+            {access.canViewMedia && (
+              <Button icon={<AppstoreAddOutlined />} onClick={() => setCollectionOpen(true)}>
+                加入合集
+              </Button>
+            )}
+            {access.canDeleteMedia && (
+              <Button danger icon={<DeleteOutlined />} onClick={() => setBatchDeleteOpen(true)}>
+                删除
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -6,6 +6,7 @@ export type PlaybackModePreference = 'auto' | 'direct' | 'hls';
 export type PlaybackMode = 'direct' | 'hls';
 export type PlaybackQuality = 'auto' | 'source' | '2160p' | '1080p' | '720p' | '480p' | '360p';
 export type TranscodeMode = 'auto' | 'software' | 'hardware';
+export type PlaybackPurpose = 'playback' | 'preview';
 
 export interface PlaybackOption {
   value: string;
@@ -50,12 +51,27 @@ export async function getPlaybackInfo(
     quality?: PlaybackQuality | string;
     transcodeMode?: TranscodeMode | string;
     start?: number;
+    purpose?: PlaybackPurpose;
+    kickoff?: boolean;
   },
 ) {
   return request<ApiResponse<PlaybackInfo>>(`/api/v1/stream/${fileId}/playback`, {
     method: 'GET',
     params,
     timeout: 120000,
+  });
+}
+
+export async function getPreviewPlaybackInfo(
+  fileId: number,
+  options?: { start?: number; kickoff?: boolean },
+) {
+  const start = options?.start;
+  return getPlaybackInfo(fileId, {
+    mode: 'auto',
+    purpose: 'preview',
+    start: start != null && start > 0 ? start : undefined,
+    kickoff: options?.kickoff,
   });
 }
 
@@ -96,9 +112,20 @@ export function getHlsMasterUrl(fileId: number) {
   return `/api/v1/stream/${fileId}/hls/master.m3u8?token=${encodeURIComponent(token)}`;
 }
 
-export function getSubtitleTrackUrl(subtitleId: number) {
+export function getSubtitleTrackUrl(
+  subtitleId: number,
+  options?: { offset?: number; delay?: number },
+) {
   const token = getAccessToken() || '';
-  return `/api/v1/stream/subtitles/${subtitleId}.vtt?token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams();
+  params.set('token', token);
+  if (options?.offset != null && options.offset > 0) {
+    params.set('offset', String(options.offset));
+  }
+  if (options?.delay != null && Math.abs(options.delay) > 0.001) {
+    params.set('delay', String(options.delay));
+  }
+  return `/api/v1/stream/subtitles/${subtitleId}.vtt?${params.toString()}`;
 }
 
 export function getChapterThumbnailUrl(chapterId: number) {

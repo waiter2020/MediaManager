@@ -137,6 +137,25 @@
   color: rgba(226, 232, 240, 0.72);
 }
 
+.player-subtitle-delay {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 4px;
+  background: rgba(9, 13, 24, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.player-subtitle-delay-value {
+  min-width: 44px;
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .player-playback-badge {
   display: inline-flex;
   align-items: center;

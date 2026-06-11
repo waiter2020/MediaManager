@@ -71,8 +71,11 @@ public class StreamController {
             @RequestParam(required = false, defaultValue = "auto") String mode,
             @RequestParam(required = false, defaultValue = "auto") String quality,
             @RequestParam(required = false, defaultValue = "auto") String transcodeMode,
-            @RequestParam(required = false) Double start) {
-        return ApiResponse.success(hlsStreamingService.resolvePlaybackInfo(fileId, mode, quality, transcodeMode, start));
+            @RequestParam(required = false) Double start,
+            @RequestParam(required = false, defaultValue = "playback") String purpose,
+            @RequestParam(required = false, defaultValue = "true") boolean kickoff) {
+        return ApiResponse.success(
+                hlsStreamingService.resolvePlaybackInfo(fileId, mode, quality, transcodeMode, start, purpose, kickoff));
     }
 
     @GetMapping(value = "/{fileId}", headers = "!" + HttpHeaders.RANGE)
@@ -142,8 +145,11 @@ public class StreamController {
 
     @GetMapping("/subtitles/{subtitleId}.vtt")
     @PreAuthorize("hasAuthority('media:play')")
-    public ResponseEntity<Resource> getSubtitleTrack(@PathVariable Integer subtitleId) throws IOException {
-        return subtitleService.getSubtitleTrack(subtitleId);
+    public ResponseEntity<Resource> getSubtitleTrack(
+            @PathVariable Integer subtitleId,
+            @RequestParam(required = false) Double offset,
+            @RequestParam(required = false) Double delay) throws IOException {
+        return subtitleService.getSubtitleTrack(subtitleId, offset, delay);
     }
 
     @GetMapping("/images/{fileId}")

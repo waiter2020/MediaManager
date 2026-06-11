@@ -7,6 +7,7 @@ import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.entity.MediaItem;
 import com.mediamanager.media.repository.MediaItemRepository;
 import com.mediamanager.media.repository.MediaItemSpecification;
+import com.mediamanager.media.repository.MediaSubtitleRepository;
 import com.mediamanager.media.service.MediaItemService;
 import com.mediamanager.system.service.LibraryAccessService;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,7 @@ public class SearchService {
     private static final int UNIFIED_CANDIDATE_LIMIT = 1000;
 
     private final MediaItemRepository itemRepository;
+    private final MediaSubtitleRepository subtitleRepository;
     private final MediaItemService mediaItemService;
     private final LibraryAccessService libraryAccessService;
     private final AiOrchestrator aiOrchestrator;
@@ -133,6 +135,7 @@ public class SearchService {
             Integer minYear,
             Integer maxYear,
             Double minRating,
+            Boolean hasSubtitle,
             int page,
             int size) {
         int safePage = Math.max(page, 1);
@@ -177,6 +180,7 @@ public class SearchService {
                 effectiveMinYear,
                 effectiveMaxYear,
                 effectiveMinRating,
+                hasSubtitle,
                 UNIFIED_CANDIDATE_LIMIT);
         String primarySource = parsedFromAi.isPresent() ? "naturalLanguage" : "keyword";
         for (int i = 0; i < keywordIds.size(); i++) {
@@ -202,7 +206,8 @@ public class SearchService {
                             tagIds,
                             effectiveMinYear,
                             effectiveMaxYear,
-                            effectiveMinRating)) {
+                            effectiveMinRating,
+                            hasSubtitle)) {
                         addCandidate(candidates, scored.itemId(), 5000d + (scored.score() * 1000d), "semantic");
                     }
                 }
@@ -221,6 +226,7 @@ public class SearchService {
                     effectiveMinYear,
                     effectiveMaxYear,
                     effectiveMinRating,
+                    hasSubtitle,
                     UNIFIED_CANDIDATE_LIMIT);
             for (int i = 0; i < fallbackIds.size(); i++) {
                 addCandidate(candidates, fallbackIds.get(i), 8000d - i, "keyword");
@@ -261,6 +267,7 @@ public class SearchService {
             Integer minYear,
             Integer maxYear,
             Double minRating,
+            Boolean hasSubtitle,
             int limit) {
         String normalizedKeyword = hasText(keyword) ? keyword.trim() : null;
         if (normalizedKeyword != null) {
@@ -276,7 +283,8 @@ public class SearchService {
                                 tagIds,
                                 minYear,
                                 maxYear,
-                                minRating))
+                                minRating,
+                                hasSubtitle))
                         .map(MediaItem::getId)
                         .limit(limit)
                         .collect(Collectors.toList());
@@ -294,7 +302,8 @@ public class SearchService {
                 tagIds,
                 minYear,
                 maxYear,
-                minRating);
+                minRating,
+                hasSubtitle);
         return itemRepository.findAll(
                         spec,
                         PageRequest.of(0, Math.max(limit, 1), Sort.by(Sort.Direction.DESC, "createdAt")))
@@ -312,7 +321,8 @@ public class SearchService {
             Set<Integer> tagIds,
             Integer minYear,
             Integer maxYear,
-            Double minRating) {
+            Double minRating,
+            Boolean hasSubtitle) {
         if (item == null || Boolean.TRUE.equals(item.getHidden())) {
             return false;
         }
@@ -337,8 +347,17 @@ public class SearchService {
                 || item.getCategories().stream().noneMatch(category -> categoryIds.contains(category.getId())))) {
             return false;
         }
-        return tagIds == null || tagIds.isEmpty()
-                || (item.getTags() != null && item.getTags().stream().anyMatch(tag -> tagIds.contains(tag.getId())));
+        if (tagIds != null && !tagIds.isEmpty()
+                && (item.getTags() == null || item.getTags().stream().noneMatch(tag -> tagIds.contains(tag.getId())))) {
+            return false;
+        }
+        if (hasSubtitle != null) {
+            boolean itemHasSubtitle = subtitleRepository.existsByMediaItemId(item.getId());
+            if (hasSubtitle != itemHasSubtitle) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void addCandidate(Map<Integer, RankedCandidate> candidates, Integer itemId, double score, String source) {

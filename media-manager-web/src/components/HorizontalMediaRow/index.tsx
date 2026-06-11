@@ -3,6 +3,7 @@ import { LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Button } from 'antd';
 import { history } from '@umijs/max';
 import MediaCard, { type MediaCardPreviewMode } from '@/components/MediaCard';
+import { MediaCardPreviewVisibilityProvider } from '@/components/MediaCard/previewVisibilityContext';
 import { openPlayerWindow } from '@/utils/playerWindow';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
 import type { MediaItem } from '@/types/media';
@@ -27,7 +28,8 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
   autoCarousel = false,
   thumbnailPreviewMode = 'hover',
 }) => {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const [isPointerInside, setIsPointerInside] = useState(false);
@@ -92,6 +94,11 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
     return () => window.clearInterval(interval);
   }, [isPointerInside, items.length, loading, shouldAutoCarousel]);
 
+  const handleScrollRef = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node;
+    setScrollRoot(node);
+  }, []);
+
   const scroll = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
     if (!el) return;
@@ -147,32 +154,38 @@ const HorizontalMediaRow: React.FC<HorizontalMediaRowProps> = ({
             <LeftOutlined />
           </button>
         )}
-        <div className="row-scroll" ref={scrollRef}>
-          {items.map((item) => (
-            <div key={item.id} className="row-scroll-item">
-              <MediaCard
-                id={item.id}
-                title={item.title}
-                type={item.type}
-                posterPath={item.posterPath}
-                fileIds={item.fileIds}
-                rating={item.rating}
-                releaseDate={item.releaseDate}
-                overview={item.overview}
-                libraryName={item.libraryName}
-                tags={item.tags}
-                categories={item.categories}
-                playbackPercent={item.playbackPercent}
-                watched={item.watched}
-                favorited={item.favorited}
-                watchlisted={item.watchlisted}
-                previewMode={effectiveThumbnailPreviewMode}
-                onClick={() => navigateItem(item)}
-                onPlay={item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type) ? () => openItemPlayer(item) : undefined}
-              />
-            </div>
-          ))}
-        </div>
+        <MediaCardPreviewVisibilityProvider value={scrollRoot}>
+          <div className="row-scroll" ref={handleScrollRef}>
+            {items.map((item) => (
+              <div key={item.id} className="row-scroll-item">
+                <MediaCard
+                  id={item.id}
+                  title={item.title}
+                  type={item.type}
+                  posterPath={item.posterPath}
+                  fileIds={item.fileIds}
+                  rating={item.rating}
+                  releaseDate={item.releaseDate}
+                  overview={item.overview}
+                  libraryName={item.libraryName}
+                  tags={item.tags}
+                  categories={item.categories}
+                  playbackPercent={item.playbackPercent}
+                  watched={item.watched}
+                  favorited={item.favorited}
+                  watchlisted={item.watchlisted}
+                  previewMode={effectiveThumbnailPreviewMode}
+                  onClick={() => navigateItem(item)}
+                  onPlay={
+                    item.type && ['MOVIE', 'TV_SHOW', 'AUDIO'].includes(item.type)
+                      ? () => openItemPlayer(item)
+                      : undefined
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </MediaCardPreviewVisibilityProvider>
         {canScrollRight && (
           <button className="scroll-btn scroll-right" onClick={() => scroll('right')}>
             <RightOutlined />

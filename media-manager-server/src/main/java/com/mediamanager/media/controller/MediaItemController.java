@@ -3,6 +3,7 @@ package com.mediamanager.media.controller;
 import com.mediamanager.common.response.ApiResponse;
 import com.mediamanager.common.response.PageResult;
 import com.mediamanager.media.dto.ClassifyBatchRequest;
+import com.mediamanager.media.dto.DeleteBatchRequest;
 import com.mediamanager.media.dto.MediaItemResponse;
 import com.mediamanager.media.dto.MediaItemDetailResponse;
 import com.mediamanager.media.dto.MediaSubtitleDto;
@@ -52,12 +53,13 @@ public class MediaItemController {
             @RequestParam(required = false) Integer minYear,
             @RequestParam(required = false) Integer maxYear,
             @RequestParam(required = false) Double minRating,
+            @RequestParam(required = false) Boolean hasSubtitle,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String sortField,
             @RequestParam(required = false) String sortOrder) {
         return ApiResponse.success(itemService.getItems(
-                libraryId, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating,
+                libraryId, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, hasSubtitle,
                 page, size, sortField, sortOrder));
     }
 
@@ -218,6 +220,13 @@ public class MediaItemController {
             @PathVariable Integer id,
             @RequestParam String q) {
         return ApiResponse.success(itemService.searchStashDbCandidates(id, q));
+    }
+
+    @PostMapping("/delete-batch")
+    @PreAuthorize("hasAuthority('media:delete')")
+    @Operation(summary = "Delete multiple media items (max 100)")
+    public ApiResponse<Map<String, Object>> deleteBatch(@Valid @RequestBody DeleteBatchRequest request) {
+        return ApiResponse.success(itemService.deleteBatch(request.getItemIds(), request.isDeleteSourceFile()));
     }
 
     @DeleteMapping("/{id}")

@@ -11,6 +11,7 @@ export interface GetItemsParams {
   minYear?: number;
   maxYear?: number;
   minRating?: number;
+  hasSubtitle?: boolean;
   page?: number;
   size?: number;
   sortField?: string;
@@ -185,6 +186,19 @@ export async function deleteItem(id: number) {
 
 export async function deleteSourceFile(id: number) {
   return request<ApiResponse<void>>(`/api/v1/items/${id}/file`, { method: 'DELETE' });
+}
+
+export interface BatchDeleteResult {
+  requested?: number;
+  succeeded?: number;
+  failed?: number;
+}
+
+export async function deleteItemsBatch(itemIds: number[], deleteSourceFile = false) {
+  return request<ApiResponse<BatchDeleteResult>>('/api/v1/items/delete-batch', {
+    method: 'POST',
+    data: { itemIds, deleteSourceFile },
+  });
 }
 
 export async function getFilters() {

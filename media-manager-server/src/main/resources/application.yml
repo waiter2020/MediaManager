@@ -64,6 +64,8 @@ spring:
 
 # Security / JWT
 mediamanager:
+  cors:
+    allowed-origin-patterns: http://localhost:*,http://127.0.0.1:*,http://*:*,https://*:*
   auth:
     enabled: true
     jwt:
@@ -79,11 +81,14 @@ mediamanager:
     playlist-wait-seconds-transcode: 90
     segment-wait-seconds: 30
     idle-stop-seconds: 120
+    preview-idle-stop-seconds: 45
     idle-check-interval-ms: 30000
+  stream:
+    aux-ports: ${MEDIAMANAGER_STREAM_AUX_PORTS:50000,50001,50002}
   playback:
     hardware-acceleration: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION:auto}
     hardware-device: ${MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE:/dev/dri/renderD128}
-    hardware-encoder: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ENCODER:h264_nvenc}
+    hardware-encoder: ${MEDIAMANAGER_PLAYBACK_HARDWARE_ENCODER:}
   ai:
     default-provider: ${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}
     llm-provider: ${MEDIAMANAGER_AI_LLM_PROVIDER:${MEDIAMANAGER_AI_DEFAULT_PROVIDER:ollama}}

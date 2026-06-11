@@ -20,7 +20,10 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
+      # Extra stream listeners — spread preview traffic across HTTP/1.1 connection pools
+      - "50000-50002:50000-50002"
     environment:
+      - MEDIAMANAGER_STREAM_AUX_PORTS=${MEDIAMANAGER_STREAM_AUX_PORTS:-50000,50001,50002}
       - MEDIAMANAGER_AUTH_JWT_SECRET=${JWT_SECRET:-change-me-in-production-256-bit-key}
       - MEDIAMANAGER_FFMPEG_PATH=/usr/bin/ffmpeg
       - MEDIAMANAGER_FFPROBE_PATH=/usr/bin/ffprobe
@@ -42,7 +45,21 @@ services:
       - ./media:/media:ro # Optional: mount local media folder read-only
       - ./data:/app/data  # PostgreSQL data + cache (thumbnails / HLS segments)
       - ${HOST_MEDIA_PATH:-./media}:/home/media:ro
-    # --- GPU hardware acceleration (optional; uncomment one block) ---
+    # --- GPU hardware acceleration (optional; uncomment ONE block, then rebuild image) ---
+    #
+    # Intel/AMD VA-API or QSV (Linux host; requires intel-media-driver in image):
+    #   1. docker compose build mediamanager
+    #   2. Uncomment the environment/devices/group_add lines below
+    #   3. If permission denied, replace render with host GID: getent group render
+    # environment:
+    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=auto
+    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE=/dev/dri/renderD128
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - video
+    #   - render
+    #
     # NVIDIA NVENC:
     # environment:
     #   - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=nvenc
@@ -53,15 +70,6 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu, video]
-    # Intel/AMD VA-API or QSV:
-    # environment:
-    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_ACCELERATION=vaapi
-    #   - MEDIAMANAGER_PLAYBACK_HARDWARE_DEVICE=/dev/dri/renderD128
-    # devices:
-    #   - /dev/dri:/dev/dri
-    # group_add:
-    #   - video
-    #   - render
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost/api/v1/system/status"]

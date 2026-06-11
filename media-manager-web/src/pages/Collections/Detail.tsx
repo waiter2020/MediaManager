@@ -25,10 +25,10 @@ import {
   type CollectionRule,
   type MediaCollection,
 } from '@/services/collection';
-import { getFileStreamUrl, resolveItemPosterUrl } from '@/services/stream';
+import MediaPreviewVideo from '@/components/MediaPreviewVideo';
+import { resolveItemPosterUrl } from '@/services/stream';
 import { openPlayerWindow } from '@/utils/playerWindow';
 import { useIsMobileAutoplayDisabled } from '@/utils/useIsMobileAutoplayDisabled';
-import { playVideoPreviewFromRandomPosition } from '@/utils/videoPreview';
 import type { MediaItem } from '@/types/media';
 import './Detail.css';
 
@@ -253,10 +253,10 @@ const CollectionDetailPage: React.FC = () => {
       {items.map((item) => {
         const listPosterUrl = getListPosterUrl(item);
         const canPreview = PREVIEWABLE_TYPES.has(item.type);
-        const previewVideoUrl = item.fileIds?.length ? getFileStreamUrl(item.fileIds[0]) : null;
+        const previewFileId = item.fileIds?.length ? item.fileIds[0] : null;
         const isPreviewActive = listPreviewItemId === item.id;
         const showVideoPreview =
-          !autoplayDisabled && canPreview && isPreviewActive && !!previewVideoUrl && !listPreviewVideoErrors[item.id];
+          !autoplayDisabled && canPreview && isPreviewActive && previewFileId != null && !listPreviewVideoErrors[item.id];
 
         return (
           <div
@@ -272,23 +272,11 @@ const CollectionDetailPage: React.FC = () => {
               ) : (
                 <div className="media-list-poster-placeholder">{getPlaceholderIcon(item.type)}</div>
               )}
-              {showVideoPreview && (
-                <video
+              {previewFileId != null && (
+                <MediaPreviewVideo
+                  fileId={previewFileId}
+                  active={showVideoPreview}
                   className="media-list-preview-video"
-                  src={previewVideoUrl || undefined}
-                  muted
-                  playsInline
-                  preload="metadata"
-                  onLoadedMetadata={(event) => {
-                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
-                    });
-                  }}
-                  onEnded={(event) => {
-                    playVideoPreviewFromRandomPosition(event.currentTarget).catch(() => {
-                      setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
-                    });
-                  }}
                   onError={() => {
                     setListPreviewVideoErrors((prev) => ({ ...prev, [item.id]: true }));
                   }}

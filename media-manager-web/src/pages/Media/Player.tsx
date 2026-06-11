@@ -92,6 +92,26 @@ function normalizeTranscodeMode(value?: string | null): TranscodeMode {
   return 'auto';
 }
 
+function formatPlaybackTime(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+const TRANSCODING_REASON_LABELS: Record<string, string> = {
+  ContainerNotSupported: '容器不支持直连',
+  VideoCodecNotSupported: '视频编码不支持直连',
+  AudioCodecNotSupported: '音频编码不支持直连',
+  PlaybackModeRequested: '已选择 HLS 模式',
+  QualityRequested: '已选择转码质量',
+  TranscodeModeRequested: '已选择编码方式',
+};
+
 const PlayerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -120,8 +140,13 @@ const PlayerPage: React.FC = () => {
   const [mediaStartOffset, setMediaStartOffset] = useState(0);
   const [transcodeSpeed, setTranscodeSpeed] = useState<TranscodeTelemetry | null>(null);
   const [activeSubtitleId, setActiveSubtitleId] = useState<number | 'off' | null>(null);
+  const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [subtitleSearchVisible, setSubtitleSearchVisible] = useState(false);
+  const [seekTargetSeconds, setSeekTargetSeconds] = useState<number | null>(null);
   const lastAudioReportRef = useRef(0);
+  const seekDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const lastSeekTargetRef = useRef<number | null>(null);
   const autoplayDisabled = useIsMobileAutoplayDisabled();
 
   const handleVideoProgress = useCallback(
@@ -150,6 +175,14 @@ const PlayerPage: React.FC = () => {
 
   const handleBufferingChange = useCallback((buffering: boolean) => {
     setPlayerBuffering(buffering);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (seekDebounceRef.current) {
+        clearTimeout(seekDebounceRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -185,6 +218,7 @@ const PlayerPage: React.FC = () => {
       setPlaybackMode(playback.data.mode === 'hls' ? 'hls' : 'direct');
       setStreamUrl(appendAuthToken(playback.data.url));
       setMediaStartOffset(playback.data.startOffset ?? (resumeSeconds > 0 ? resumeSeconds : 0));
+      lastSeekTargetRef.current = playback.data.startOffset ?? (resumeSeconds > 0 ? resumeSeconds : 0);
       if (playback.data.qualities?.length) {
         setQualityOptions(playback.data.qualities);
       }
@@ -328,15 +362,17 @@ const PlayerPage: React.FC = () => {
   }, [data?.subtitles, fileId]);
 
   const subtitleTracks = useMemo(
-    () =>
-      availableSubtitles.map((subtitle) => ({
+    () => {
+      const offset = playbackMode === 'hls' ? mediaStartOffset : 0;
+      return availableSubtitles.map((subtitle) => ({
         id: subtitle.id,
-        src: getSubtitleTrackUrl(subtitle.id),
+        src: getSubtitleTrackUrl(subtitle.id, { offset, delay: subtitleDelay }),
         label: subtitle.title || subtitle.language || subtitle.fileName || `Subtitle ${subtitle.id}`,
         language: subtitle.language,
         defaultTrack: subtitle.defaultTrack,
-      })),
-    [availableSubtitles],
+      }));
+    },
+    [availableSubtitles, playbackMode, mediaStartOffset, subtitleDelay],
   );
 
   const activeSubtitleIndex = useMemo(() => {
@@ -392,6 +428,21 @@ const PlayerPage: React.FC = () => {
     refreshItemDetail().catch(() => {});
   }, [refreshItemDetail]);
 
+  const adjustSubtitleDelay = useCallback((delta: number) => {
+    setSubtitleDelay((current) => {
+      const next = Math.round((current + delta) * 2) / 2;
+      return Math.max(-10, Math.min(10, next));
+    });
+  }, []);
+
+  const subtitleDelayLabel = useMemo(() => {
+    if (Math.abs(subtitleDelay) < 0.001) {
+      return '0s';
+    }
+    const sign = subtitleDelay > 0 ? '+' : '';
+    return `${sign}${subtitleDelay.toFixed(1)}s`;
+  }, [subtitleDelay]);
+
   const subtitleSelectOptions = useMemo(
     () => [
       { value: 'off', label: '关闭字幕' },
@@ -444,9 +495,11 @@ const PlayerPage: React.FC = () => {
     });
   };
 
-  const handleSeekRequest = useCallback(
+  const executeSeek = useCallback(
     async (absoluteSeconds: number) => {
-      if (fileId == null || switchingPlayback || playbackMode !== 'hls') return;
+      if (fileId == null || playbackMode !== 'hls') return;
+      const floored = Math.max(0, Math.floor(absoluteSeconds));
+      lastSeekTargetRef.current = floored;
       await runPlaybackSwitch(async () => {
         setStreamKey((k) => k + 1);
         await loadPlayback(
@@ -454,18 +507,37 @@ const PlayerPage: React.FC = () => {
           playbackPreference,
           selectedQuality,
           selectedTranscodeMode,
-          absoluteSeconds,
+          floored,
         );
       });
+      setSeekTargetSeconds(null);
     },
-    [
-      fileId,
-      switchingPlayback,
-      playbackMode,
-      playbackPreference,
-      selectedQuality,
-      selectedTranscodeMode,
-    ],
+    [fileId, playbackMode, playbackPreference, selectedQuality, selectedTranscodeMode],
+  );
+
+  const handleSeekRequest = useCallback(
+    (absoluteSeconds: number) => {
+      if (fileId == null || switchingPlayback || playbackMode !== 'hls') return;
+      const floored = Math.max(0, Math.floor(absoluteSeconds));
+      setSeekTargetSeconds(floored);
+      pendingSeekRef.current = floored;
+      if (seekDebounceRef.current) {
+        clearTimeout(seekDebounceRef.current);
+      }
+      seekDebounceRef.current = setTimeout(() => {
+        const target = pendingSeekRef.current;
+        pendingSeekRef.current = null;
+        if (target == null) {
+          return;
+        }
+        if (lastSeekTargetRef.current === target && !switchingPlayback) {
+          setSeekTargetSeconds(null);
+          return;
+        }
+        executeSeek(target);
+      }, 400);
+    },
+    [fileId, switchingPlayback, playbackMode, executeSeek],
   );
 
   useEffect(() => {
@@ -504,9 +576,13 @@ const PlayerPage: React.FC = () => {
     }
 
     if (switchingPlayback) {
+      const tip =
+        seekTargetSeconds != null
+          ? `正在跳转到 ${formatPlaybackTime(seekTargetSeconds)}，等待转码…`
+          : '正在切换播放参数...';
       return (
         <div className="player-center">
-          <Spin size="large" tip="正在切换播放参数..." />
+          <Spin size="large" tip={tip} />
         </div>
       );
     }
@@ -589,6 +665,7 @@ const PlayerPage: React.FC = () => {
           fill
           startTime={playbackMode === 'hls' ? 0 : startTime}
           mediaStartOffset={mediaStartOffset}
+          durationSeconds={playbackInfo?.durationSeconds}
           onSeekRequest={playbackMode === 'hls' ? handleSeekRequest : undefined}
           subtitles={subtitleTracks}
           activeSubtitleIndex={activeSubtitleIndex}
@@ -620,6 +697,15 @@ const PlayerPage: React.FC = () => {
             </div>
             <div className="player-subtitle">
               {data?.libraryName || '媒体播放'} {formatQuality(playbackInfo)}
+              {playbackInfo?.transcodingReasons?.length ? (
+                <span className="player-transcode-reasons">
+                  {' '}
+                  ·{' '}
+                  {playbackInfo.transcodingReasons
+                    .map((reason) => TRANSCODING_REASON_LABELS[reason] || reason)
+                    .join(' · ')}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -632,7 +718,11 @@ const PlayerPage: React.FC = () => {
                 onChange={(value) => handleModeChange(value as PlaybackModePreference)}
                 options={[
                   { label: '自动', value: 'auto' },
-                  { label: '直连', value: 'direct' },
+                  {
+                    label: '直连',
+                    value: 'direct',
+                    disabled: playbackInfo?.directPlayable === false,
+                  },
                   { label: 'HLS', value: 'hls' },
                 ]}
               />
@@ -676,6 +766,27 @@ const PlayerPage: React.FC = () => {
                 options={subtitleSelectOptions}
                 onChange={(value) => setActiveSubtitleId(value === 'off' ? 'off' : Number(value))}
               />
+              <div className="player-subtitle-delay">
+                <Button
+                  className="player-icon-button"
+                  size="small"
+                  aria-label="字幕延迟减 0.5 秒"
+                  disabled={activeSubtitleId === 'off' || subtitleDelay <= -10}
+                  onClick={() => adjustSubtitleDelay(-0.5)}
+                >
+                  −
+                </Button>
+                <span className="player-subtitle-delay-value" title="字幕延迟">{subtitleDelayLabel}</span>
+                <Button
+                  className="player-icon-button"
+                  size="small"
+                  aria-label="字幕延迟加 0.5 秒"
+                  disabled={activeSubtitleId === 'off' || subtitleDelay >= 10}
+                  onClick={() => adjustSubtitleDelay(0.5)}
+                >
+                  +
+                </Button>
+              </div>
               <Button
                 className="player-icon-button"
                 icon={<SearchOutlined />}

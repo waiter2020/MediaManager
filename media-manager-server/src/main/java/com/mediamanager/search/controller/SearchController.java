@@ -104,6 +104,9 @@ public class SearchController {
         Integer minYear = body.get("minYear") != null ? Integer.parseInt(String.valueOf(body.get("minYear"))) : null;
         Integer maxYear = body.get("maxYear") != null ? Integer.parseInt(String.valueOf(body.get("maxYear"))) : null;
         Double minRating = body.get("minRating") != null ? Double.parseDouble(String.valueOf(body.get("minRating"))) : null;
+        Boolean hasSubtitle = body.get("hasSubtitle") != null
+                ? Boolean.parseBoolean(String.valueOf(body.get("hasSubtitle")))
+                : null;
         int page = body.get("page") != null ? Integer.parseInt(String.valueOf(body.get("page"))) : 1;
         int size = body.get("size") != null ? Integer.parseInt(String.valueOf(body.get("size"))) : 20;
 
@@ -116,6 +119,7 @@ public class SearchController {
                 minYear,
                 maxYear,
                 minRating,
+                hasSubtitle,
                 page,
                 size));
     }

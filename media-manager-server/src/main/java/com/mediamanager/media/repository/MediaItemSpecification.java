@@ -3,6 +3,7 @@ package com.mediamanager.media.repository;
 import com.mediamanager.classification.entity.Category;
 import com.mediamanager.classification.entity.Tag;
 import com.mediamanager.media.entity.MediaItem;
+import com.mediamanager.media.entity.MediaSubtitle;
 import com.mediamanager.metadata.entity.AudioMetadata;
 import com.mediamanager.metadata.entity.ImageMetadata;
 import com.mediamanager.metadata.entity.MovieMetadata;
@@ -29,7 +30,7 @@ public class MediaItemSpecification {
             String keyword,
             Set<Integer> categoryIds,
             Set<Integer> tagIds) {
-        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, null, null, true);
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, null, null, null, true);
     }
 
     public static Specification<MediaItem> filterBy(
@@ -41,7 +42,21 @@ public class MediaItemSpecification {
             Integer minYear,
             Integer maxYear,
             Double minRating) {
-        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, null, null, true);
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, null, null, null, true);
+    }
+
+    public static Specification<MediaItem> filterBy(
+            Set<Integer> libraryIds,
+            String type,
+            String keyword,
+            Set<Integer> categoryIds,
+            Set<Integer> tagIds,
+            Integer minYear,
+            Integer maxYear,
+            Double minRating,
+            Boolean hasSubtitle) {
+        return filterBy(
+                libraryIds, type, keyword, categoryIds, tagIds, minYear, maxYear, minRating, null, null, hasSubtitle, true);
     }
 
     public static Specification<MediaItem> filterBy(
@@ -51,7 +66,7 @@ public class MediaItemSpecification {
             Set<Integer> categoryIds,
             Set<Integer> tagIds,
             boolean visibleOnly) {
-        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, null, null, visibleOnly);
+        return filterBy(libraryIds, type, keyword, categoryIds, tagIds, null, null, null, null, null, null, visibleOnly);
     }
 
     public static Specification<MediaItem> filterBy(
@@ -76,6 +91,7 @@ public class MediaItemSpecification {
                 minRating,
                 metadataField,
                 metadataValue,
+                null,
                 true);
     }
 
@@ -90,6 +106,7 @@ public class MediaItemSpecification {
             Double minRating,
             String metadataField,
             String metadataValue,
+            Boolean hasSubtitle,
             boolean visibleOnly) {
 
         return (root, query, criteriaBuilder) -> {
@@ -152,11 +169,27 @@ public class MediaItemSpecification {
                 predicates.add(metadataPredicate);
             }
 
+            if (hasSubtitle != null) {
+                predicates.add(subtitleExistsPredicate(root, query, criteriaBuilder, hasSubtitle));
+            }
+
             // Distict results because of joins
             query.distinct(true);
 
             return criteriaBuilder.and(predicates.toArray(new Predicate[0]));
         };
+    }
+
+    private static Predicate subtitleExistsPredicate(
+            Root<MediaItem> root,
+            CriteriaQuery<?> query,
+            jakarta.persistence.criteria.CriteriaBuilder criteriaBuilder,
+            boolean hasSubtitle) {
+        Subquery<Integer> subquery = query.subquery(Integer.class);
+        Root<MediaSubtitle> subtitle = subquery.from(MediaSubtitle.class);
+        subquery.select(subtitle.get("id"));
+        subquery.where(criteriaBuilder.equal(subtitle.get("mediaItem").get("id"), root.get("id")));
+        return hasSubtitle ? criteriaBuilder.exists(subquery) : criteriaBuilder.not(criteriaBuilder.exists(subquery));
     }
 
     private static Predicate metadataPredicate(

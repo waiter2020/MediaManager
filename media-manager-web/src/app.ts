@@ -4,6 +4,7 @@ import React from 'react';
 import ScanProgressBanner from '@/components/ScanProgressBanner';
 import ScrapeProgressBanner from '@/components/ScrapeProgressBanner';
 import LibraryAccessBanner from '@/components/LibraryAccessBanner';
+import { initStreamOrigins } from '@/utils/streamOrigin';
 import { fetchAndApplyGlobalTheme, resolveEffectiveTheme, type ThemePreference } from '@/utils/theme';
 import {
   clearSessionTokens,
@@ -185,13 +186,24 @@ function mapCurrentUser(data: API.CurrentUser | undefined): API.CurrentUser | un
   };
 }
 
+async function bootstrapStreamOrigins(): Promise<void> {
+  try {
+    const res = await fetch('/api/v1/system/status');
+    const json = await res.json();
+    const ports = json?.data?.capabilities?.streamAuxPorts;
+    await initStreamOrigins(Array.isArray(ports) ? ports : []);
+  } catch {
+    await initStreamOrigins([]);
+  }
+}
+
 export async function getInitialState(): Promise<{
   isLogin: boolean;
   setupCompleted: boolean;
   currentUser?: API.CurrentUser;
   theme?: ThemePreference;
 }> {
-  const theme = await fetchAndApplyGlobalTheme();
+  const [theme] = await Promise.all([fetchAndApplyGlobalTheme(), bootstrapStreamOrigins()]);
   const token = getAccessToken();
 
   if (!token) {

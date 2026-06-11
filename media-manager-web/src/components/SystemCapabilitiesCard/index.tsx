@@ -48,6 +48,15 @@ const SystemCapabilitiesCard: React.FC = () => {
     return null;
   }
 
+  const hwConfigured = caps.hardwareAccelerationConfigured || 'auto';
+  const hwResolved = caps.hardwareAccelerationResolved || hwConfigured;
+  const hwExplicitlyDisabled = hwConfigured === 'none';
+  const hwStatusSuffix = caps.hardwareEncoderAvailable
+    ? '（可用）'
+    : hwExplicitlyDisabled
+      ? '（已禁用硬编码）'
+      : '（软编码回退）';
+
   return (
     <Card title="运行时能力" style={{ marginBottom: 16 }}>
       {caps.aiDegraded && (
@@ -56,6 +65,21 @@ const SystemCapabilitiesCard: React.FC = () => {
           showIcon
           style={{ marginBottom: 12 }}
           message={caps.aiDegradedReason || 'AI 服务处于降级模式'}
+        />
+      )}
+      {caps.hardwareAccelerationWarnings && caps.hardwareAccelerationWarnings.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="硬件加速警告"
+          description={
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {caps.hardwareAccelerationWarnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          }
         />
       )}
       <Descriptions column={2} size="small">
@@ -67,8 +91,8 @@ const SystemCapabilitiesCard: React.FC = () => {
         </Descriptions.Item>
         <Descriptions.Item label="硬件加速">
           <Tag color={caps.hardwareEncoderAvailable ? 'success' : 'default'}>
-            {caps.hardwareAccelerationResolved || caps.hardwareAccelerationConfigured || 'auto'}
-            {caps.hardwareEncoderAvailable ? '（可用）' : '（软编码回退）'}
+            {hwResolved}
+            {hwStatusSuffix}
           </Tag>
         </Descriptions.Item>
         <Descriptions.Item label="向量提供方">

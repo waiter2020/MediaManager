@@ -10,9 +10,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -28,6 +31,9 @@ public class SystemCapabilitiesService {
 
     @Value("${mediamanager.ffprobe.path:ffprobe}")
     private String yamlFfprobePath;
+
+    @Value("${mediamanager.stream.aux-ports:}")
+    private String streamAuxPortsConfig;
 
     public boolean isFfmpegAvailable() {
         return isCommandAvailable(sysConfigService.ffmpegPath(yamlFfmpegPath));
@@ -91,6 +97,25 @@ public class SystemCapabilitiesService {
         caps.put("hardwareEncoderAvailable", hwProbe.resolvedEncoder() != null && !hwProbe.resolvedEncoder().isBlank());
         caps.put("hardwareAccelerationWarnings", hwProbe.warnings());
         caps.put("hardwareEncodersAvailable", hwProbe.encodersAvailable());
+        caps.put("streamAuxPorts", parseStreamAuxPorts());
         return caps;
+    }
+
+    private List<Integer> parseStreamAuxPorts() {
+        if (streamAuxPortsConfig == null || streamAuxPortsConfig.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(streamAuxPortsConfig.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .map(value -> {
+                    try {
+                        return Integer.parseInt(value);
+                    } catch (NumberFormatException ignored) {
+                        return null;
+                    }
+                })
+                .filter(value -> value != null && value > 0 && value <= 65535)
+                .collect(Collectors.toList());
     }
 }
